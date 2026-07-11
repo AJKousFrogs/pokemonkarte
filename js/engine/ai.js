@@ -9,10 +9,14 @@
 // benchmark how winnable each level is).
 
 import {
-  playToBench, attachEnergy, attack, retreat, endTurn, promote,
+  playToBench, attachEnergy, attack, retreat, endTurn, promote, playTrainer,
   affordableAttacks, attackDamage, canRetreat, BENCH_SIZE,
 } from './battle.js';
 import { typeMultiplier } from '../data/typechart.js';
+
+function trainerIndex(s, key) {
+  return s.hand.findIndex((c) => c.kind === 'trainer' && c.trainer.key === key);
+}
 
 export function aiTakeTurn(state, tier, who = 'enemy') {
   const opp = who === 'enemy' ? 'player' : 'enemy';
@@ -22,6 +26,7 @@ export function aiTakeTurn(state, tier, who = 'enemy') {
   if (state.turn !== who) return;
 
   benchPhase(state, tier, who, opp);
+  trainerPhase(state, tier, who);
   energyPhase(state, tier, who, opp);
   if (tier === 'strategic') retreatPhase(state, who, opp);
 
@@ -45,23 +50,50 @@ export function aiPromote(state, tier, who, opp) {
 
 function benchPhase(state, tier, who, opp) {
   const s = state[who];
-  while (s.bench.length < BENCH_SIZE && s.hand.length > 0) {
-    let idx = 0;
+  while (s.bench.length < BENCH_SIZE) {
+    const pokes = s.hand
+      .map((card, i) => ({ card, i }))
+      .filter(({ card }) => card.kind === 'poke');
+    if (pokes.length === 0) break;
+    let idx = pokes[0].i;
     if (tier === 'random') {
       if (state.rng() < 0.4) break; // random AI sometimes forgets to bench
-      idx = Math.floor(state.rng() * s.hand.length);
+      idx = pokes[Math.floor(state.rng() * pokes.length)].i;
     } else {
       // Bench the card with the best long-term value vs the opposing active.
       let bestScore = -Infinity;
-      s.hand.forEach((card, i) => {
+      for (const { card, i } of pokes) {
         const offense = state[opp].active
           ? typeMultiplier(card.base.type, state[opp].active.base.type) : 1;
         const power = Math.max(...card.base.attacks.map((a) => a.damage));
         const score = (tier === 'strategic' ? offense * 60 : 0) + power + card.hp / 2;
         if (score > bestScore) { bestScore = score; idx = i; }
-      });
+      }
     }
     if (!playToBench(state, who, idx)) break;
+  }
+}
+
+// Support cards: extra energy is always good, heal when meaningfully hurt,
+// refresh a dead hand. (Switch is handled during the retreat phase.)
+function trainerPhase(state, tier, who) {
+  const s = state[who];
+  const skipChance = tier === 'random' ? 0.5 : 0;
+
+  let i;
+  while ((i = trainerIndex(s, 'energize')) >= 0) {
+    if (state.rng() < skipChance || !playTrainer(state, who, i)) break;
+  }
+  while ((i = trainerIndex(s, 'potion')) >= 0) {
+    const hurt = [s.active, ...s.bench].some((c) => c && c.maxHp - c.hp >= 30);
+    if (!hurt || state.rng() < skipChance || !playTrainer(state, who, i)) break;
+  }
+  const r = trainerIndex(s, 'research');
+  if (r >= 0 && state.rng() >= skipChance) {
+    const pokeInHand = s.hand.some((c) => c.kind === 'poke');
+    if (s.deck.length >= 4 && (s.hand.length <= 2 || (!pokeInHand && s.bench.length < BENCH_SIZE))) {
+      playTrainer(state, who, r);
+    }
   }
 }
 
@@ -106,7 +138,9 @@ function retreatPhase(state, who, opp) {
   const s = state[who];
   const active = s.active;
   const oppActive = state[opp].active;
-  if (!active || !oppActive || !canRetreat(state, who)) return;
+  if (!active || !oppActive || s.bench.length === 0) return;
+  const switchIdx = trainerIndex(s, 'switch');
+  if (!canRetreat(state, who) && switchIdx < 0) return;
 
   const currentBest = bestAttackValue(active, oppActive, s.damageBonus);
   const inDanger = active.hp <= active.maxHp * 0.3;
@@ -121,7 +155,10 @@ function retreatPhase(state, who, opp) {
     const val = bestAttackValue(card, oppActive, s.damageBonus);
     if (val > bestVal) { bestVal = val; bestIdx = i; }
   });
-  if (bestIdx >= 0) retreat(state, who, bestIdx);
+  if (bestIdx < 0) return;
+  // A Switch card saves the energy cost; otherwise pay to retreat.
+  if (switchIdx >= 0) playTrainer(state, who, switchIdx, bestIdx);
+  else retreat(state, who, bestIdx);
 }
 
 function bestAttackValue(card, defender, damageBonus) {

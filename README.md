@@ -1,8 +1,11 @@
 # 🎴 Pokémon Karte
 
-A Pokémon card-battle campaign for the browser. Ten escalating levels, eight
-unlockable decks, a 56-entry Pokédex, and fifteen legendary Pokémon guarding
-the endgame. No frameworks, no build step, no dependencies — plain ES modules.
+A Pokémon card-battle campaign for the browser — the code behind
+[phantom-gate-tcg.netlify.app](https://phantom-gate-tcg.netlify.app).
+All **1025 Pokémon** (each with its own artwork), **22 themed decks**,
+trainer support cards, the full 18-type chart, and a ten-level campaign
+that gets brutally hard at the top. No frameworks, no build step, no
+dependencies — plain ES modules.
 
 ## Run it
 
@@ -14,7 +17,8 @@ python3 -m http.server 8000
 ```
 
 Then visit <http://localhost:8000>. (Opening `index.html` directly from disk
-won't work — ES modules require an HTTP origin.)
+won't work — ES modules require an HTTP origin.) Pokémon artwork is loaded
+from the PokeAPI sprite CDN with graceful fallback.
 
 ## How to play
 
@@ -22,46 +26,64 @@ won't work — ES modules require an HTTP origin.)
   bench them.
 - **Energy**: you get 1 energy per turn — click one of your Pokémon to attach
   it. Attacks *require* energy but don't consume it; retreating *does* spend it.
-- **Attack**: attacks end your turn. Damage follows the type chart
+- **Trainer cards** (mixed into every deck): 🧴 Potion heals 30, 🔄 Switch
+  swaps your active for free, 🧪 Professor's Research redraws your hand,
+  🔋 Energy Boost grants +1 energy this turn. Playing them never ends your turn.
+- **Attack**: attacks end your turn. Damage follows the full 18-type chart
   (▲ super effective ×2, ▼ resisted ×0.5).
 - **Win**: knock out enough Pokémon to hit your KO target before the trainer
   hits theirs — or run your opponent out of Pokémon.
 - **Statuses**: 💫 paralysis skips an attack, 🔥 burn ticks 10 per turn,
   🛡️ barriers absorb the next hit.
 
+## The Pokédex
+
+All 1025 species from Gen 1–9, generated deterministically from official
+PokeAPI base-stat data (`tools/generate-pokedex.mjs`): HP, attacks, costs,
+retreat, and rarity all derive from real stats, and 94 legendaries/mythicals
+form the endgame tier. Browse with search, type, generation and
+caught/seen/legendary filters. Enemy Pokémon are marked *seen* when you face
+them; winning levels and unlocking decks *catches* them.
+
+## Decks (22)
+
+One deck per type — Blaze Legion, Tidal Force, Verdant Bloom, Volt Storm,
+Wild Frontier, Swarm Tactics, Sky Riders, Stone Wall, Quake Makers, Iron
+Fist, Toxic Veil, Mind Benders, Moonlight Court, Frostbite, Steel Bastion,
+Midnight Pack, Phantom Gate, Dragon Fury — plus four special sets: Starter
+Legacy, Eevee Family, Mythic Whisper, and Legends Awakened (beat the game).
+Fire/Water/Grass are available from the start; the rest unlock as you climb.
+Deck strength scales with unlock level, and **picking the right counter-type
+per opponent is the core strategic decision**.
+
 ## The campaign (it gets hard)
 
 | Levels | Opponents | What changes |
 |---|---|---|
 | 1–2 | Youngster, Bug Catcher | Random AI. Warm-up. |
-| 3–5 | Sailor, Ace Trainer, Gym Leader Sabrina | Greedy AI, first stat handicaps, Mew appears. |
-| 6–8 | Surge, Elite Four Lorelei & Lance | **Strategic AI** that plays match-ups and retreats; legendary birds, Rayquaza, Ho-Oh; enemy HP/damage bonuses; extra enemy energy; smaller opening hands. |
-| 9 | Champion Cynthia | Dialga, Palkia, Giratina, Darkrai behind +20 HP / +10 damage. |
-| 10 | The Original One | An all-legendary deck led by Arceus, +30 HP, +20 damage, fast energy — and you need 5 KOs while it needs only 3. |
-
-Winning a level catches new Pokédex entries and unlocks decks:
-**Ember Squad / Tidal Wave / Verdant Grove** (start) → **Volt Storm** (L2) →
-**Mind Bender** (L4) → **Iron Fist** (L6) → **Dragon Fury** (L8) →
-**Legends Awakened** (beat the game).
-
-Deck choice matters more than anything: a fire deck that cruises past Bug
-Catcher Rina gets washed away at Vermilion Docks.
+| 3–5 | Sailor, Ace Trainer, Sabrina | Greedy AI, first handicaps, trainer cards, Mew. |
+| 6–8 | Surge, Lorelei, Lance | **Strategic AI** that plays match-ups, retreats, and uses support cards; legendary birds, Kyogre, Rayquaza; +20 HP/+20 damage; extra energy; smaller hands. |
+| 9 | Champion Cynthia | Her true team led by twin Garchomp, backed by Dialga, Palkia, Giratina, Darkrai. |
+| 10 | The Original One | Arceus and eleven other legendaries, +30 HP, fast energy — you need 5 KOs, it needs 3. |
 
 ## Project layout
 
 ```
-index.html            entry point
-css/style.css         all styling
-js/main.js            bootstrap
-js/ui.js              screens & DOM (menu, campaign, deck picker, battle, Pokédex)
-js/storage.js         localStorage save (progress, Pokédex, stats)
-js/data/typechart.js  type effectiveness, icons, colors
-js/data/pokedex.js    all 56 Pokémon cards (attacks, effects, rarity)
-js/data/decks.js      the 8 player decks + unlock levels
-js/data/levels.js     the 10-level campaign & difficulty modifiers
-js/engine/battle.js   pure battle engine (no DOM)
-js/engine/ai.js       trainer AI: random / greedy / strategic tiers
-tools/simulate.mjs    balance harness — AI-vs-AI win-rate matrix
+index.html               entry point
+css/style.css            all styling
+js/main.js               bootstrap
+js/ui.js                 screens & DOM (menu, campaign, deck picker, battle, Pokédex)
+js/storage.js            localStorage save (progress, Pokédex, stats)
+js/data/typechart.js     full 18-type effectiveness, icons, colors
+js/data/pokedex.gen.js   GENERATED: all 1025 Pokémon cards
+js/data/pokedex.js       expander + sprite CDN sources
+js/data/decks.js         GENERATED: the 22 player decks
+js/data/trainers.js      trainer (support) card definitions
+js/data/levels.js        the 10-level campaign & difficulty modifiers
+js/engine/battle.js      pure battle engine (no DOM)
+js/engine/ai.js          trainer AI: random / greedy / strategic tiers
+tools/generate-pokedex.mjs  data pipeline from official PokeAPI CSVs
+tools/simulate.mjs       balance harness — AI-vs-AI win-rate matrix
 ```
 
 ## Balancing
@@ -73,6 +95,21 @@ node tools/simulate.mjs            # strategic bot ≈ skilled player
 node tools/simulate.mjs greedy     # greedy bot ≈ casual player
 ```
 
-Current tuning (strategic bot, best unlocked deck): ~100% on L1–3, 75–90% on
-L4–6, ~20% through the Elite Four and Champion, and ~1–2% against the Hall of
-Origin. Humans outperform the bot, so the finale is brutal but beatable.
+Current tuning (strategic bot, best unlocked deck): ~100% on L1–4 *if* you
+counter-pick correctly, ~90% mid-game, 20–45% through the Elite Four and
+Champion, and ~6% against the Hall of Origin. Humans outperform the bot, so
+the finale is brutal but beatable.
+
+## Regenerating the Pokédex
+
+```bash
+node tools/generate-pokedex.mjs          # fetches PokeAPI CSVs from GitHub
+node tools/generate-pokedex.mjs ./csv    # or use a local CSV directory
+```
+
+## History
+
+This codebase merges two earlier efforts: the original **Phantom Gate TCG**
+(a single-file build deployed to Netlify by drag-and-drop — its sprite
+pipeline and trainer cards live on here) and the modular engine written for
+this repository (AI tiers, campaign difficulty system, simulation balancing).

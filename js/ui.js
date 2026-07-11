@@ -1,13 +1,14 @@
 // All screens and DOM rendering. The UI drives the battle engine through its
 // public API only; game rules live in js/engine/.
 
-import { POKEDEX, getPokemon } from './data/pokedex.js';
-import { TYPE_ICONS, TYPE_COLORS, typeMultiplier } from './data/typechart.js';
+import { POKEDEX, getPokemon, artSources } from './data/pokedex.js';
+import { getTrainer } from './data/trainers.js';
+import { TYPE_ICONS, TYPE_COLORS, TYPES, typeMultiplier } from './data/typechart.js';
 import { DECKS } from './data/decks.js';
 import { LEVELS } from './data/levels.js';
 import {
   newBattle, playToBench, attachEnergy, attack, retreat, endTurn, promote,
-  attackDamage, canRetreat, BENCH_SIZE,
+  playTrainer, attackDamage, canRetreat, BENCH_SIZE,
 } from './engine/battle.js';
 import { aiTakeTurn } from './engine/ai.js';
 import {
@@ -20,11 +21,13 @@ let screen = 'menu';        // menu | levels | deckpick | battle | dex
 let currentLevel = null;
 let currentDeck = null;
 let battle = null;
-let retreatMode = false;
+let benchMode = null;       // null | 'retreat' | 'switch' (switch = free, via trainer card)
+let switchHandIdx = -1;     // hand index of the Switch card being played
 let lastSeenLog = 0;
 let enemyThinking = false;
 let resultModal = null;     // { win, newCatches, unlockedDeck }
 let dexDetail = null;       // pokedex entry shown in modal
+let dexFilter = { q: '', type: '', gen: '', status: '' };
 
 // ---------------------------------------------------------------- helpers
 
@@ -42,8 +45,27 @@ function typeChip(type) {
   return `<span class="type-chip" style="background:${TYPE_COLORS[type]}">${TYPE_ICONS[type]} ${type}</span>`;
 }
 
-function artFor(base) {
-  return base.rarity === 'legendary' ? `✨${TYPE_ICONS[base.type]}` : TYPE_ICONS[base.type];
+// Every Pokémon gets its own photo, with graceful fallback down the source
+// list and finally to a type glyph (pattern ported from Phantom Gate TCG).
+function spriteImg(base, cls = '', lazy = false) {
+  const srcs = artSources(base.id);
+  const onerr = "var s=JSON.parse(this.dataset.s);var i=(+this.dataset.i||0)+1;"
+    + "if(i<s.length){this.dataset.i=i;this.src=s[i];}"
+    + "else{this.outerHTML='<span class=\\'glyph\\'>'+this.dataset.g+'</span>';}";
+  return `<img class="sprite ${cls}" ${lazy ? 'loading="lazy"' : ''} src="${srcs[2]}"
+    data-s="${esc(JSON.stringify(srcs))}" data-i="2" data-g="${TYPE_ICONS[base.type]}"
+    onerror="${onerr}" alt="${esc(base.name)}">`;
+}
+
+// Bigger art (official artwork first) for detail views.
+function artworkImg(base, cls = '') {
+  const srcs = artSources(base.id);
+  const onerr = "var s=JSON.parse(this.dataset.s);var i=(+this.dataset.i||0)+1;"
+    + "if(i<s.length){this.dataset.i=i;this.src=s[i];}"
+    + "else{this.outerHTML='<span class=\\'glyph\\'>'+this.dataset.g+'</span>';}";
+  return `<img class="artwork ${cls}" loading="lazy" src="${srcs[0]}"
+    data-s="${esc(JSON.stringify(srcs))}" data-i="0" data-g="${TYPE_ICONS[base.type]}"
+    onerror="${onerr}" alt="${esc(base.name)}">`;
 }
 
 export function render() {
@@ -63,7 +85,8 @@ export function render() {
 
 function go(next) {
   screen = next;
-  retreatMode = false;
+  benchMode = null;
+  switchHandIdx = -1;
   render();
 }
 
@@ -182,9 +205,13 @@ function deckpick() {
   const grid = frag.querySelector('.deck-grid');
   for (const deck of DECKS) {
     const locked = deck.unlockLevel > save.beatenLevel;
-    const minis = deck.cards.map((id) => {
-      const p = getPokemon(id);
-      return `<span class="mini-type" title="${esc(p.name)}" style="background:${TYPE_COLORS[p.type]}">${TYPE_ICONS[p.type]}</span>`;
+    const minis = deck.cards.map((code) => {
+      if (typeof code === 'string') {
+        const t = getTrainer(code);
+        return `<span class="mini-type trainer" title="${esc(t.name)}">${t.icon}</span>`;
+      }
+      const p = getPokemon(code);
+      return `<span class="mini-type" title="${esc(p.name)}" style="background:${TYPE_COLORS[p.type]}">${spriteImg(p, 'mini')}</span>`;
     }).join('');
     const card = h(`
       <div class="deck-card ${locked ? 'locked' : ''}">
@@ -248,6 +275,7 @@ function finishBattle() {
 }
 
 function pcard(card, { small = false, attacks = false, selectable = false, hideHp = false } = {}) {
+  if (card.kind === 'trainer') return tcard(card, { small, selectable });
   const base = card.base;
   const pct = Math.max(0, Math.min(100, (card.hp / card.maxHp) * 100));
   const barClass = pct <= 30 ? 'low' : pct <= 60 ? 'mid' : '';
@@ -279,7 +307,7 @@ function pcard(card, { small = false, attacks = false, selectable = false, hideH
         <span>${TYPE_ICONS[base.type]}</span><span>${base.rarity === 'legendary' ? '★ LEGEND' : esc(base.rarity)}</span>
       </div>
       <div class="statuses">${statuses}</div>
-      <div class="art">${artFor(base)}</div>
+      <div class="art">${spriteImg(base)}</div>
       <div class="nm">${esc(base.name)}</div>
       ${hideHp ? '' : `
         <div class="hpbar ${barClass}"><div style="width:${pct}%"></div></div>
@@ -288,6 +316,20 @@ function pcard(card, { small = false, attacks = false, selectable = false, hideH
       ${attackHtml}
     </div>`);
   return frag;
+}
+
+// Trainer (support) card.
+function tcard(card, { small = false, selectable = false } = {}) {
+  const t = card.trainer;
+  return h(`
+    <div class="pcard tcard ${small ? 'small' : ''} ${selectable ? 'selectable' : ''}" title="${esc(t.desc)}">
+      <div class="head" style="background:var(--accent);color:#1a1a06">
+        <span>${t.icon}</span><span>TRAINER</span>
+      </div>
+      <div class="art"><span class="glyph">${t.icon}</span></div>
+      <div class="nm">${esc(t.name)}</div>
+      <div class="tdesc">${esc(t.desc)}</div>
+    </div>`);
 }
 
 function battleScreen() {
@@ -350,7 +392,7 @@ function battleScreen() {
   const youField = frag.querySelector('#you-field');
   const canGiveEnergy = yourTurn && you.energyBudget > 0 && !b.pendingPromote;
   if (you.active) {
-    const activeCard = pcard(you.active, { attacks: true, selectable: canGiveEnergy && !retreatMode });
+    const activeCard = pcard(you.active, { attacks: true, selectable: canGiveEnergy && !benchMode });
     activeCard.querySelectorAll('[data-atk]').forEach((btn) => {
       btn.onclick = (e) => {
         e.stopPropagation();
@@ -358,21 +400,25 @@ function battleScreen() {
         afterPlayerAction();
       };
     });
-    if (canGiveEnergy && !retreatMode) {
+    if (canGiveEnergy && !benchMode) {
       activeCard.firstElementChild.onclick = () => { attachEnergy(b, 'player', 'active'); afterPlayerAction(); };
       activeCard.firstElementChild.title = 'Attach ⚡ energy';
     }
     youField.appendChild(activeCard);
   }
   if (you.bench.length) {
-    const benchWrap = h(`<div><div class="bench-label">${retreatMode ? 'Click who takes over!' : 'Bench'}</div><div class="row"></div></div>`);
+    const benchWrap = h(`<div><div class="bench-label">${benchMode ? 'Click who takes over!' : 'Bench'}</div><div class="row"></div></div>`);
     you.bench.forEach((c, i) => {
-      const selectable = (retreatMode && yourTurn) || (canGiveEnergy && !retreatMode);
+      const selectable = (benchMode && yourTurn) || (canGiveEnergy && !benchMode);
       const cardEl = pcard(c, { small: true, selectable });
-      if (retreatMode && yourTurn) {
+      if (benchMode && yourTurn) {
         cardEl.firstElementChild.onclick = () => {
-          retreatMode = false;
-          retreat(b, 'player', i);
+          const mode = benchMode;
+          const trainerIdx = switchHandIdx;
+          benchMode = null;
+          switchHandIdx = -1;
+          if (mode === 'switch') playTrainer(b, 'player', trainerIdx, i);
+          else retreat(b, 'player', i);
           afterPlayerAction();
         };
       } else if (canGiveEnergy) {
@@ -384,31 +430,56 @@ function battleScreen() {
     youField.appendChild(benchWrap);
   }
 
-  // --- hand
+  // --- hand (Pokémon bench on click; trainer cards play their effect)
   const hand = frag.querySelector('#hand');
   you.hand.forEach((c, i) => {
-    const canPlay = yourTurn && you.bench.length < BENCH_SIZE && !b.pendingPromote;
-    const cardEl = pcard(c, { small: true, selectable: canPlay, hideHp: false });
-    if (canPlay) cardEl.firstElementChild.onclick = () => { playToBench(b, 'player', i); afterPlayerAction(); };
-    hand.appendChild(cardEl);
+    const actable = yourTurn && !b.pendingPromote && !benchMode;
+    if (c.kind === 'trainer') {
+      const cardEl = pcard(c, { small: true, selectable: actable });
+      if (actable) {
+        cardEl.firstElementChild.onclick = () => {
+          if (c.trainer.key === 'switch') {
+            if (you.bench.length === 0 || !you.active) return;
+            benchMode = 'switch';
+            switchHandIdx = i;
+            render();
+          } else {
+            playTrainer(b, 'player', i);
+            afterPlayerAction();
+          }
+        };
+      }
+      hand.appendChild(cardEl);
+    } else {
+      const canPlay = actable && you.bench.length < BENCH_SIZE;
+      const cardEl = pcard(c, { small: true, selectable: canPlay });
+      if (canPlay) cardEl.firstElementChild.onclick = () => { playToBench(b, 'player', i); afterPlayerAction(); };
+      hand.appendChild(cardEl);
+    }
   });
 
   // --- action bar
   const actions = frag.querySelector('#actions');
-  const hint = retreatMode
-    ? 'Pick a bench Pokémon to switch in (retreat spends energy).'
-    : canGiveEnergy
-      ? 'Click one of your Pokémon to attach energy, then attack or end your turn.'
-      : yourTurn ? 'Attack with your active Pokémon, or end your turn.' : '';
+  const hint = benchMode === 'switch'
+    ? 'Switch: pick a bench Pokémon to swap in for free.'
+    : benchMode === 'retreat'
+      ? 'Pick a bench Pokémon to switch in (retreat spends energy).'
+      : canGiveEnergy
+        ? 'Click one of your Pokémon to attach energy, then attack or end your turn.'
+        : yourTurn ? 'Attack with your active Pokémon, or end your turn.' : '';
   actions.appendChild(h(`
     <span class="energy-chip">⚡ energy left: ${you.energyBudget}</span>
     <span class="hint">${hint}</span>`));
-  const retreatBtn = h(`<button ${yourTurn && canRetreat(b, 'player') ? '' : 'disabled'}>
-    ${retreatMode ? 'Cancel retreat' : `Retreat (⚡${you.active ? you.active.base.retreat : 0})`}</button>`);
-  retreatBtn.firstElementChild.onclick = () => { retreatMode = !retreatMode; render(); };
+  const retreatBtn = h(`<button ${yourTurn && (benchMode || canRetreat(b, 'player')) ? '' : 'disabled'}>
+    ${benchMode ? 'Cancel' : `Retreat (⚡${you.active ? you.active.base.retreat : 0})`}</button>`);
+  retreatBtn.firstElementChild.onclick = () => {
+    benchMode = benchMode ? null : 'retreat';
+    switchHandIdx = -1;
+    render();
+  };
   actions.appendChild(retreatBtn);
   const endBtn = h(`<button class="btn-primary" ${yourTurn ? '' : 'disabled'}>End turn ▶</button>`);
-  endBtn.firstElementChild.onclick = () => { retreatMode = false; endTurn(b); afterPlayerAction(); };
+  endBtn.firstElementChild.onclick = () => { benchMode = null; endTurn(b); afterPlayerAction(); };
   actions.appendChild(endBtn);
 
   // --- log
@@ -472,7 +543,7 @@ function resultOverlay() {
       const base = getPokemon(id);
       rewards.appendChild(h(`
         <div style="text-align:center">
-          <div style="font-size:30px">${artFor(base)}</div>
+          <div class="reward-art">${spriteImg(base)}</div>
           <div style="font-size:12.5px;font-weight:600">${esc(base.name)}</div>
           <div>${typeChip(base.type)}</div>
         </div>`));
@@ -486,33 +557,83 @@ function resultOverlay() {
 
 // ---------------------------------------------------------------- pokédex
 
+const GENERATIONS = [1, 2, 3, 4, 5, 6, 7, 8, 9];
+
 function dex() {
   const save = loadSave();
+  const seenSet = new Set(save.seen);
+  const caughtSet = new Set(save.caught);
+  const legendaries = POKEDEX.filter((p) => p.rarity === 'legendary');
+
   const frag = h(`
     <div>
       <h2>Pokédex</h2>
       <div class="dex-progress">
         Seen ${save.seen.length}/${POKEDEX.length} · Caught ${save.caught.length}/${POKEDEX.length}
-        · Legendaries caught: ${POKEDEX.filter((p) => p.rarity === 'legendary' && save.caught.includes(p.id)).length}/${POKEDEX.filter((p) => p.rarity === 'legendary').length} ★
+        · Legendaries caught: ${legendaries.filter((p) => caughtSet.has(p.id)).length}/${legendaries.length} ★
       </div>
+      <div class="dex-controls">
+        <input type="search" id="dex-q" placeholder="Search name or #number…" value="${esc(dexFilter.q)}">
+        <select id="dex-type">
+          <option value="">All types</option>
+          ${TYPES.map((t) => `<option value="${t}" ${dexFilter.type === t ? 'selected' : ''}>${TYPE_ICONS[t]} ${t}</option>`).join('')}
+        </select>
+        <select id="dex-gen">
+          <option value="">All generations</option>
+          ${GENERATIONS.map((g) => `<option value="${g}" ${dexFilter.gen === String(g) ? 'selected' : ''}>Gen ${g}</option>`).join('')}
+        </select>
+        <select id="dex-status">
+          <option value="">Everything</option>
+          <option value="caught" ${dexFilter.status === 'caught' ? 'selected' : ''}>✅ Caught</option>
+          <option value="seen" ${dexFilter.status === 'seen' ? 'selected' : ''}>👁 Seen</option>
+          <option value="legendary" ${dexFilter.status === 'legendary' ? 'selected' : ''}>★ Legendary</option>
+        </select>
+      </div>
+      <div class="dex-count"></div>
       <div class="dex-grid"></div>
     </div>`);
+
+  const q = dexFilter.q.trim().toLowerCase();
+  const filtered = POKEDEX.filter((p) => {
+    if (q && !p.name.toLowerCase().includes(q) && String(p.id) !== q.replace('#', '')) return false;
+    if (dexFilter.type && p.type !== dexFilter.type) return false;
+    if (dexFilter.gen && String(p.gen) !== dexFilter.gen) return false;
+    if (dexFilter.status === 'caught' && !caughtSet.has(p.id)) return false;
+    if (dexFilter.status === 'seen' && !seenSet.has(p.id)) return false;
+    if (dexFilter.status === 'legendary' && p.rarity !== 'legendary') return false;
+    return true;
+  });
+  frag.querySelector('.dex-count').textContent = `${filtered.length} Pokémon shown`;
+
   const grid = frag.querySelector('.dex-grid');
-  const sorted = [...POKEDEX].sort((a, b) => a.id - b.id);
-  for (const p of sorted) {
-    const seen = save.seen.includes(p.id);
-    const caught = save.caught.includes(p.id);
+  for (const p of filtered) {
+    const seen = seenSet.has(p.id);
+    const caught = caughtSet.has(p.id);
     const entry = h(`
       <div class="dex-entry ${seen ? '' : 'unseen'} ${p.rarity === 'legendary' && seen ? 'legendary' : ''}">
-        <div class="dex-no">#${String(p.id).padStart(3, '0')}</div>
-        <div class="dex-icon">${seen ? artFor(p) : '❔'}</div>
+        <div class="dex-no">#${String(p.id).padStart(4, '0')} · G${p.gen}</div>
+        <div class="dex-icon">${seen ? spriteImg(p, '', true) : '❔'}</div>
         <div class="dex-name">${seen ? esc(p.name) : '???'}</div>
         <div class="dex-status">${caught ? '✅ Caught' : seen ? '👁 Seen' : ''}</div>
       </div>`);
     if (seen) entry.firstElementChild.onclick = () => { dexDetail = p; render(); };
     grid.appendChild(entry);
   }
+
+  frag.querySelector('#dex-q').oninput = (e) => { dexFilter.q = e.target.value; render(); refocus('dex-q'); };
+  frag.querySelector('#dex-type').onchange = (e) => { dexFilter.type = e.target.value; render(); };
+  frag.querySelector('#dex-gen').onchange = (e) => { dexFilter.gen = e.target.value; render(); };
+  frag.querySelector('#dex-status').onchange = (e) => { dexFilter.status = e.target.value; render(); };
   return frag;
+}
+
+// Re-focus the search box after a render triggered by typing.
+function refocus(id) {
+  const el = document.getElementById(id);
+  if (el) {
+    el.focus();
+    el.setSelectionRange(el.value.length, el.value.length);
+  }
 }
 
 function dexOverlay() {
@@ -520,8 +641,8 @@ function dexOverlay() {
   const frag = h(`
     <div class="overlay">
       <div class="modal dex-detail">
-        <div class="art">${artFor(p)}</div>
-        <h2>${esc(p.name)} <span style="font-size:14px;color:var(--text-dim)">#${String(p.id).padStart(3, '0')}</span></h2>
+        <div class="art">${artworkImg(p)}</div>
+        <h2>${esc(p.name)} <span style="font-size:14px;color:var(--text-dim)">#${String(p.id).padStart(4, '0')} · Gen ${p.gen}</span></h2>
         <div style="margin:6px 0 10px">${typeChip(p.type)}
           ${p.rarity === 'legendary' ? '<span class="type-chip" style="background:var(--accent)">★ legendary</span>' : ''}
         </div>

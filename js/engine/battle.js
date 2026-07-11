@@ -12,6 +12,7 @@
 //     that cannot field a replacement Pokémon loses immediately.
 
 import { getPokemon } from '../data/pokedex.js';
+import { getTrainer } from '../data/trainers.js';
 import { typeMultiplier } from '../data/typechart.js';
 
 export const BENCH_SIZE = 3;
@@ -19,10 +20,15 @@ export const HAND_LIMIT = 8;
 
 let uidCounter = 0;
 
-function makeCard(pokedexId, hpBonus = 0) {
-  const base = getPokemon(pokedexId);
+// Deck entries are Pokédex ids (numbers) or trainer-card keys (strings).
+function makeCard(code, hpBonus = 0) {
+  if (typeof code === 'string') {
+    return { uid: ++uidCounter, kind: 'trainer', trainer: getTrainer(code) };
+  }
+  const base = getPokemon(code);
   return {
     uid: ++uidCounter,
+    kind: 'poke',
     base,
     hp: base.hp + hpBonus,
     maxHp: base.hp + hpBonus,
@@ -42,10 +48,15 @@ function shuffle(arr, rng) {
   return a;
 }
 
-function makeSide(name, deckIds, opts, rng) {
-  const cards = shuffle(deckIds, rng).map((id) => makeCard(id, opts.hpBonus));
+function makeSide(name, deckCodes, opts, rng) {
+  // Re-shuffle until the opening hand contains a Pokémon to lead with.
+  let cards;
+  for (let tries = 0; ; tries++) {
+    cards = shuffle(deckCodes, rng).map((code) => makeCard(code, opts.hpBonus));
+    if (cards.slice(0, opts.handSize).some((c) => c.kind === 'poke') || tries >= 20) break;
+  }
   const hand = cards.splice(0, opts.handSize);
-  const active = hand.shift(); // first drawn Pokémon leads
+  const active = hand.splice(hand.findIndex((c) => c.kind === 'poke'), 1)[0];
   return {
     name,
     deck: cards,
@@ -121,8 +132,11 @@ export function startTurn(state) {
 
   // Draw.
   if (s.deck.length > 0 && s.hand.length < HAND_LIMIT) {
-    s.hand.push(s.deck.shift());
-    if (who === 'player') log(state, `You drew ${s.hand[s.hand.length - 1].base.name}.`);
+    const drawn = s.deck.shift();
+    s.hand.push(drawn);
+    if (who === 'player') {
+      log(state, `You drew ${drawn.kind === 'poke' ? drawn.base.name : drawn.trainer.name}.`);
+    }
   }
 }
 
@@ -131,10 +145,55 @@ export function playToBench(state, who, handIndex) {
   if (state.winner || state.turn !== who || state.pendingPromote) return false;
   if (s.bench.length >= BENCH_SIZE) return false;
   const card = s.hand[handIndex];
-  if (!card) return false;
+  if (!card || card.kind !== 'poke') return false;
   s.hand.splice(handIndex, 1);
   s.bench.push(card);
   log(state, `${s.name} benched ${card.base.name}.`);
+  return true;
+}
+
+// Play a trainer card from hand. `arg` is the bench index for Switch.
+// Trainer cards never end the turn.
+export function playTrainer(state, who, handIndex, arg) {
+  const s = side(state, who);
+  if (state.winner || state.turn !== who || state.pendingPromote) return false;
+  const card = s.hand[handIndex];
+  if (!card || card.kind !== 'trainer') return false;
+  const key = card.trainer.key;
+
+  if (key === 'potion') {
+    const targets = [s.active, ...s.bench].filter((c) => c && c.hp < c.maxHp);
+    if (targets.length === 0) return false;
+    targets.sort((a, b) => (b.maxHp - b.hp) - (a.maxHp - a.hp));
+    const t = targets[0];
+    const healed = Math.min(30, t.maxHp - t.hp);
+    t.hp += healed;
+    log(state, `${s.name} used Potion — ${t.base.name} healed ${healed} HP.`);
+  } else if (key === 'switch') {
+    const incoming = s.bench[arg];
+    if (!incoming || !s.active) return false;
+    s.active.burned = false;
+    s.bench[arg] = s.active;
+    s.active = incoming;
+    log(state, `${s.name} used Switch — ${incoming.base.name} is now active!`);
+  } else if (key === 'research') {
+    if (s.deck.length === 0) return false;
+    const discarded = s.hand.filter((_, i) => i !== handIndex);
+    s.discard.push(...discarded);
+    s.hand = [card];
+    const drawn = s.deck.splice(0, 4);
+    s.hand.push(...drawn);
+    log(state, `${s.name} used Professor’s Research — discarded ${discarded.length}, drew ${drawn.length}.`);
+  } else if (key === 'energize') {
+    s.energyBudget++;
+    log(state, `${s.name} used Energy Boost — +1 energy this turn!`);
+  } else {
+    return false;
+  }
+
+  const idx = s.hand.indexOf(card);
+  s.hand.splice(idx, 1);
+  s.discard.push(card);
   return true;
 }
 
@@ -302,36 +361,38 @@ function resolveKnockouts(state) {
     const s = side(state, who);
     if (s.active) continue;
     const from = s.bench.length > 0 ? 'bench' : 'hand';
-    const pool = from === 'bench' ? s.bench : s.hand;
-    if (pool.length === 0) {
+    const options = promoteOptions(s, from);
+    if (options.length === 0) {
       state.winner = opponentOf(who);
       log(state, `${s.name} has no Pokémon left! ${side(state, state.winner).name} wins!`);
       return;
     }
-    if (who === 'player' && pool.length > 1) {
-      state.pendingPromote = {
-        side: who,
-        from,
-        options: pool.map((card, index) => ({ index, card })),
-      };
+    if (who === 'player' && options.length > 1) {
+      state.pendingPromote = { side: who, from, options };
     } else {
-      autoPromote(state, who);
+      autoPromote(state, who, options);
     }
   }
 }
 
-function autoPromote(state, who) {
+// Promotable cards with their absolute index in the pool (hands may also hold
+// trainer cards, which can't be sent into battle).
+function promoteOptions(s, from) {
+  const pool = from === 'bench' ? s.bench : s.hand;
+  return pool.map((card, index) => ({ index, card })).filter(({ card }) => card.kind === 'poke');
+}
+
+function autoPromote(state, who, options) {
   const s = side(state, who);
   const o = side(state, opponentOf(who));
-  const pool = s.bench.length > 0 ? s.bench : s.hand;
   // Pick the replacement with the best type match-up, then the most HP.
-  let best = 0;
+  let best = options[0].index;
   let bestScore = -Infinity;
-  pool.forEach((card, i) => {
+  for (const { index, card } of options) {
     const offense = o.active ? typeMultiplier(card.base.type, o.active.base.type) : 1;
     const score = offense * 100 + card.hp;
-    if (score > bestScore) { bestScore = score; best = i; }
-  });
+    if (score > bestScore) { bestScore = score; best = index; }
+  }
   promote(state, who, best);
 }
 
@@ -340,7 +401,7 @@ export function promote(state, who, index) {
   if (s.active) return false;
   const pool = s.bench.length > 0 ? s.bench : s.hand;
   const card = pool[index];
-  if (!card) return false;
+  if (!card || card.kind !== 'poke') return false;
   pool.splice(index, 1);
   s.active = card;
   if (state.pendingPromote?.side === who) state.pendingPromote = null;

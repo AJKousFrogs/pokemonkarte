@@ -43,12 +43,16 @@ export function unlockedDecks() {
 }
 
 export function markSeen(ids) {
-  for (const id of ids) if (!save.seen.includes(id)) save.seen.push(id);
+  for (const id of ids) {
+    if (typeof id !== 'number') continue; // deck lists mix in trainer cards
+    if (!save.seen.includes(id)) save.seen.push(id);
+  }
   persist();
 }
 
 export function markCaught(ids) {
   for (const id of ids) {
+    if (typeof id !== 'number') continue;
     if (!save.caught.includes(id)) save.caught.push(id);
     if (!save.seen.includes(id)) save.seen.push(id);
   }
