@@ -1,0 +1,20 @@
+# Netlify configuration for phantom-gate-tcg.
+# The game is fully static (ES modules, no build step): publish the repo root.
+[build]
+  publish = "."
+
+# Long-cache the generated data and engine; HTML revalidates on every visit.
+[[headers]]
+  for = "/*.html"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
+
+[[headers]]
+  for = "/js/*"
+  [headers.values]
+    Cache-Control = "public, max-age=3600"
+
+[[headers]]
+  for = "/css/*"
+  [headers.values]
+    Cache-Control = "public, max-age=3600"
