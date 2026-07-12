@@ -1,0 +1,185 @@
+/* ============================================================
+   Pokémon Karte — Design Tokens
+   Single source of truth. Layers:
+     1. Primitives   (raw color scales, font stacks, size ramps)
+     2. Semantic     (surface / text / border / action / feedback)
+     3. Component    (energy types, cards, badges)
+   Consumed by style.css — components never hardcode raw values.
+   ============================================================ */
+
+:root {
+  /* ---------- 1. PRIMITIVES ---------- */
+
+  /* Night-blue scale (bg elevations, borders) */
+  --blue-950: #0b0f18;
+  --blue-900: #10141f;
+  --blue-850: #161c2c;
+  --blue-800: #1a2030;
+  --blue-750: #202840;
+  --blue-700: #232b40;
+  --blue-600: #2c3650;
+  --blue-500: #35405e;
+  --blue-400: #4a5878;
+  --blue-300: #6b7a9e;
+  --blue-200: #9aa5c0;
+  --blue-100: #cdd5e8;
+  --blue-50:  #e8ecf5;
+
+  /* Brand */
+  --yellow-400: #ffd83d;
+  --yellow-500: #ffcb05;   /* Pikachu gold — primary action */
+  --yellow-700: #b38d00;
+  --yellow-900: #7a6403;
+  --cerulean-500: #3d7dca; /* Pokéball blue — informational */
+
+  /* Feedback */
+  --green-400: #58d68b;
+  --green-500: #46a758;
+  --green-700: #2f6e3d;
+  --red-400: #ff8f92;
+  --red-500: #e5484d;
+  --red-700: #6e2f31;
+  --orange-400: #f5a524;
+
+  /* Font stacks */
+  --font-display: 'Sora', 'Segoe UI', system-ui, sans-serif;
+  --font-body: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
+
+  /* Type ramp — 1.25 modular scale on a 16px base */
+  --fs-h1: 2.441rem;   /* 39px */
+  --fs-h2: 1.953rem;   /* 31px */
+  --fs-h3: 1.563rem;   /* 25px */
+  --fs-h4: 1.25rem;    /* 20px */
+  --fs-h5: 1rem;       /* 16px */
+  --fs-h6: 0.8125rem;  /* 13px — uppercase labels */
+  --fs-body: 0.9375rem;
+  --fs-sm: 0.8125rem;
+  --fs-caption: 0.75rem;
+  --fs-micro: 0.6875rem;
+
+  --lh-tight: 1.15;
+  --lh-heading: 1.25;
+  --lh-body: 1.5;
+
+  --fw-regular: 400;
+  --fw-medium: 500;
+  --fw-semibold: 600;
+  --fw-bold: 700;
+  --fw-heavy: 800;
+
+  --ls-tight: -0.01em;
+  --ls-wide: 0.06em;
+  --ls-caps: 0.09em;
+
+  /* Spacing — 4px base */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+
+  /* Radii */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 18px;
+  --radius-pill: 999px;
+
+  /* Elevation */
+  --shadow-1: 0 1px 3px rgba(0, 0, 0, 0.35);
+  --shadow-2: 0 4px 14px rgba(0, 0, 0, 0.4);
+  --shadow-3: 0 10px 34px rgba(0, 0, 0, 0.5);
+  --glow-action: 0 0 0 2px rgba(255, 203, 5, 0.35);
+  --glow-positive: 0 0 0 3px rgba(70, 167, 88, 0.7), 0 0 22px rgba(70, 167, 88, 0.45);
+  --glow-danger: 0 0 0 3px rgba(229, 72, 77, 0.7), 0 0 22px rgba(229, 72, 77, 0.45);
+
+  /* Motion */
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --dur-fast: 120ms;
+  --dur-base: 220ms;
+  --dur-slow: 420ms;
+
+  /* Z-index scale */
+  --z-hud: 5;
+  --z-overlay: 20;
+  --z-float: 30;
+
+  /* ---------- 2. SEMANTIC ---------- */
+
+  --surface-page: var(--blue-900);
+  --surface-raised: var(--blue-800);
+  --surface-card: var(--blue-700);
+  --surface-sunken: #141927;
+  --surface-hud: rgba(18, 23, 36, 0.94);
+
+  --text-primary: var(--blue-50);
+  --text-secondary: var(--blue-200);
+  --text-tertiary: var(--blue-300);
+  --text-inverse: #1a1a06;
+
+  --border-subtle: rgba(255, 255, 255, 0.07);
+  --border-default: var(--blue-500);
+  --border-strong: var(--blue-400);
+
+  --action-primary: var(--yellow-500);
+  --action-primary-hover: var(--yellow-400);
+  --action-primary-edge: var(--yellow-900);
+  --info: var(--cerulean-500);
+  --positive: var(--green-500);
+  --positive-soft: rgba(70, 167, 88, 0.16);
+  --warning: var(--orange-400);
+  --danger: var(--red-500);
+  --danger-soft: rgba(229, 72, 77, 0.14);
+
+  --focus-ring: 0 0 0 3px rgba(61, 125, 202, 0.6);
+
+  /* ---------- 3. COMPONENT: ENERGY / TYPE SYSTEM ----------
+     Each energy type gets a hue + a soft translucent wash.
+     Cards carry `--tc` (type color) set from these in the UI. */
+
+  --type-normal:   #a8a878;
+  --type-fire:     #f08030;
+  --type-water:    #6890f0;
+  --type-grass:    #78c850;
+  --type-electric: #f8d030;
+  --type-ice:      #98d8d8;
+  --type-fighting: #c03028;
+  --type-poison:   #a040a0;
+  --type-ground:   #e0c068;
+  --type-flying:   #a890f0;
+  --type-psychic:  #f85888;
+  --type-bug:      #a8b820;
+  --type-rock:     #b8a038;
+  --type-ghost:    #705898;
+  --type-dragon:   #7038f8;
+  --type-dark:     #705848;
+  --type-steel:    #b8b8d0;
+  --type-fairy:    #ee99ac;
+
+  /* ---------- LEGACY ALIASES (older markup + inline styles) ---------- */
+  --bg: var(--surface-page);
+  --bg-panel: var(--surface-raised);
+  --bg-card: var(--surface-card);
+  --border: var(--border-default);
+  --text: var(--text-primary);
+  --text-dim: var(--text-secondary);
+  --accent: var(--action-primary);
+  --accent-2: var(--info);
+  --danger-legacy: var(--danger);
+  --ok: var(--positive);
+  --radius: var(--radius-lg);
+}
+
+/* Respect users who prefer minimal motion. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

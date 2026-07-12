@@ -392,9 +392,9 @@ function pcard(card, { size = 'hand', attacks = false, selectable = false, badge
 
   const frag = h(`
     <div class="pcard ${size} ${selectable ? 'selectable' : ''} ${base.rarity === 'legendary' ? 'legendary' : ''}"
-         data-uid="${card.uid}">
+         data-uid="${card.uid}" style="--tc:${TYPE_COLORS[base.type]}">
       ${badge ? `<span class="pbadge ${badge === 'READY' ? 'ready' : 'charge'}">${badge}</span>` : ''}
-      <div class="head" style="background:${TYPE_COLORS[base.type]}">
+      <div class="head">
         <span>${TYPE_ICONS[base.type]}</span><span>${base.rarity === 'legendary' ? '★ LEGEND' : esc(base.rarity)}</span>
       </div>
       <div class="statuses">${statuses}</div>
@@ -670,9 +670,14 @@ function promoteOverlay() {
 
 function resultOverlay() {
   const { win, newCatches, unlockedDeck } = resultModal;
+  const confetti = win
+    ? `<div class="confetti">${Array.from({ length: 16 }, (_, i) =>
+        `<i style="left:${4 + i * 6}%;animation-delay:${(i % 8) * 0.21}s;background:${['#ffcb05', '#ff5b60', '#58d68b', '#6890f0', '#f85888', '#a890f0'][i % 6]}"></i>`).join('')}</div>`
+    : '';
   const frag = h(`
     <div class="overlay">
       <div class="modal">
+        ${confetti}
         <h2>${win ? '🏆 Victory!' : '💀 Defeat…'}</h2>
         <p class="sub">${win
           ? `You beat ${esc(currentLevel.trainer)} at ${esc(currentLevel.title)}!`
