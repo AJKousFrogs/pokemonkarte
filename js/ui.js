@@ -239,13 +239,15 @@ function startBattle(level, deck) {
   resultModal = null;
   enemyThinking = false;
   playing = false;
-  bannerText = `${level.trainer} wants to battle! First to ${level.playerPrizeTarget} KOs wins.`;
+  bannerText = battle.log[battle.log.length - 1]?.msg
+    || `${level.trainer} wants to battle! First to ${level.playerPrizeTarget} KOs wins.`;
   // Show the how-to-play card automatically on the very first battle.
   if (!localStorage.getItem('pokemonkarte-help-seen')) {
     helpOpen = true;
     localStorage.setItem('pokemonkarte-help-seen', '1');
   }
   go('battle');
+  maybeEnemyTurn(); // the coin flip may have given the trainer the first turn
 }
 
 // ----- action → animation pipeline ------------------------------------
@@ -367,6 +369,7 @@ function pcard(card, { size = 'hand', attacks = false, selectable = false, badge
   const statuses = [
     card.paralyzed ? '<span title="Paralyzed">💫</span>' : '',
     card.burned ? '<span title="Burned">🔥</span>' : '',
+    card.poisoned ? '<span title="Poisoned">☠️</span>' : '',
     card.shield > 0 ? `<span title="Barrier ${card.shield}">🛡️</span>` : '',
   ].join('');
 
@@ -376,6 +379,7 @@ function pcard(card, { size = 'hand', attacks = false, selectable = false, badge
     attackHtml = '<div class="attack-list">' + base.attacks.map((atk, i) => {
       const afford = card.energy >= atk.cost;
       const usable = afford && battle.turn === 'player' && !battle.winner
+        && battle.turnNumber > 1
         && !battle.pendingPromote && !battle.player.attackedThisTurn && !enemyThinking && !playing;
       const dmg = defender ? attackDamage(atk, card, defender, battle.player.damageBonus) : atk.damage;
       const eff = defender && !atk.effect?.pierce
@@ -413,7 +417,7 @@ function tcard(card, { size = 'hand', selectable = false } = {}) {
   const t = card.trainer;
   return h(`
     <div class="pcard tcard ${size} ${selectable ? 'selectable' : ''}" data-uid="${card.uid}" title="${esc(t.desc)}">
-      <div class="head trainer-head"><span>${t.icon}</span><span>TRAINER</span></div>
+      <div class="head trainer-head"><span>${t.icon}</span><span>${t.category === 'supporter' ? 'SUPPORTER' : 'ITEM'}</span></div>
       <div class="art"><span class="glyph">${t.icon}</span></div>
       <div class="nm">${esc(t.name)}</div>
       <div class="tdesc">${esc(t.desc)}</div>
@@ -437,7 +441,8 @@ function battleScreen() {
   // Contextual hint when nothing is animating.
   let idleHint = bannerText;
   if (yourTurn && !playing) {
-    if (benchMode === 'switch') idleHint = 'Switch: tap a bench Pokémon to swap in for free.';
+    if (b.turnNumber === 1) idleHint = 'First turn: bench Pokémon and attach energy — attacking starts next turn (official rule).';
+    else if (benchMode === 'switch') idleHint = 'Switch: tap a bench Pokémon to swap in for free.';
     else if (benchMode === 'retreat') idleHint = `Retreat: tap a bench Pokémon to swap in (costs ⚡${you.active ? you.active.base.retreat : 0}).`;
     else if (canGiveEnergy) idleHint = '⚡ Tap one of your Pokémon to give it energy.';
     else if (you.active && affordableAttack(you.active) && !you.attackedThisTurn) idleHint = 'Choose an attack — or play cards first.';
@@ -482,7 +487,7 @@ function battleScreen() {
 
       <div class="action-bar">
         <span class="energy-chip ${you.energyBudget > 0 && yourTurn ? 'has' : ''}">⚡ ${you.energyBudget} to attach</span>
-        <span class="deckcount dim">deck ${you.deck.length}</span>
+        <span class="deckcount ${you.deck.length <= 3 ? 'warn' : 'dim'}">deck ${you.deck.length}${you.deck.length <= 3 ? ' ⚠' : ''}</span>
         <span class="spacer"></span>
         <button id="btn-retreat" ${yourTurn && (benchMode || canRetreat(b, 'player')) ? '' : 'disabled'}>
           ${benchMode ? '✖ Cancel' : `Retreat ⚡${you.active ? you.active.base.retreat : 0}`}</button>
@@ -559,6 +564,8 @@ function battleScreen() {
             benchMode = 'switch';
             switchHandIdx = i;
             render();
+          } else if (c.trainer.category === 'supporter' && you.supporterUsedThisTurn) {
+            setBanner('Only one Supporter card per turn (official rule).');
           } else {
             act(() => playTrainer(b, 'player', i));
           }
@@ -629,10 +636,10 @@ function helpOverlay() {
             You get 1 energy per turn. Tap any of your Pokémon (glowing gold) to power it up. Attacks need energy to use — but don't spend it.</div></div>
           <div class="help-step"><span class="step-no">3</span>
             <div><strong>Attack (or retreat)</strong><br>
-            When your active Pokémon shows <span style="color:#7fd493;font-weight:700">READY</span>, tap an attack. ▲ means super effective (×2), ▼ resisted (×½). Attacking ends your turn. Retreating swaps in a bench Pokémon and spends energy.</div></div>
+            When your active Pokémon shows <span style="color:#7fd493;font-weight:700">READY</span>, tap an attack. ▲ means super effective (×2), ▼ resisted (×½). Attacking ends your turn. Official rules: the coin-flip winner goes first but can't attack on the game's very first turn, you may retreat only once per turn, and only one Supporter card per turn.</div></div>
           <div class="help-step"><span class="step-no">4</span>
             <div><strong>Win by knock-outs</strong><br>
-            Each KO fills one of your diamonds ◆ at the top. Fill them all before your opponent does. 💫 paralysis skips an attack, 🔥 burn deals 10 per turn, 🛡️ barriers absorb one hit.</div></div>
+            Each KO fills one of your diamonds ◆ at the top. Fill them all before your opponent does — and watch your deck: if you can't draw a card at the start of your turn, you lose (deck-out). 💫 paralysis skips a turn, 🔥 burn deals 20 between turns, ☠️ poison deals 10 and doesn't wear off, 🛡️ barriers absorb one hit. Retreating cures conditions.</div></div>
         </div>
         <div class="btns"><button class="btn-primary">Got it!</button></div>
       </div>

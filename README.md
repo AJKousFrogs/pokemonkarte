@@ -22,19 +22,28 @@ from the PokeAPI sprite CDN with graceful fallback.
 
 ## How to play
 
+The rules follow the **official Pokémon TCG rulebook**, scaled down for
+mobile play (16-card decks, 3-card bench, KO targets instead of 6 prizes):
+
+- **Setup**: a coin flip decides who goes first; the starting player cannot
+  attack on the game's very first turn. If your opening hand has no Pokémon
+  you mulligan — and your opponent draws an extra card.
 - **Field**: one active Pokémon, up to 3 on the bench. Click hand cards to
   bench them.
 - **Energy**: you get 1 energy per turn — click one of your Pokémon to attach
-  it. Attacks *require* energy but don't consume it; retreating *does* spend it.
-- **Trainer cards** (mixed into every deck): 🧴 Potion heals 30, 🔄 Switch
-  swaps your active for free, 🧪 Professor's Research redraws your hand,
-  🔋 Energy Boost grants +1 energy this turn. Playing them never ends your turn.
+  it. Attacks *require* energy but don't consume it; retreating *does* spend
+  it, and you may retreat **only once per turn**.
+- **Trainer cards**: Items (🧴 Potion, 🔄 Switch, 🔋 Energy Boost) can be
+  played freely; **only one Supporter** (🧪 Professor's Research) per turn.
+  Playing them never ends your turn.
 - **Attack**: attacks end your turn. Damage follows the full 18-type chart
   (▲ super effective ×2, ▼ resisted ×0.5).
-- **Win**: knock out enough Pokémon to hit your KO target before the trainer
-  hits theirs — or run your opponent out of Pokémon.
-- **Statuses**: 💫 paralysis skips an attack, 🔥 burn ticks 10 per turn,
-  🛡️ barriers absorb the next hit.
+- **Win**: reach your KO target, knock out every opposing Pokémon — or
+  **deck them out**: a player who cannot draw at the start of their turn loses.
+- **Special Conditions** (per the rulebook): 💫 paralysis blocks attacking and
+  retreating for a turn, 🔥 burn deals 20 between turns with a coin-flip cure,
+  ☠️ poison deals 10 and never wears off on its own, 🛡️ barriers absorb one
+  hit. Moving to the bench cures all conditions.
 
 ## The Pokédex
 

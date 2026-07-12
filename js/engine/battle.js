@@ -1,15 +1,20 @@
 // Core battle engine. Pure logic, no DOM — the UI and the test harness both
 // drive battles exclusively through the functions exported here.
 //
-// Rules summary:
-//   - Each side runs a 12-card deck; every card is a Pokémon.
-//   - One active Pokémon, up to 3 on the bench.
-//   - Draw 1 card at the start of your turn; you may attach 1 energy per turn
-//     (some enemy trainers periodically get 2 — see doubleEnergyEvery).
-//   - Attacks require (but do not consume) energy. Attacking ends your turn.
-//   - Retreating consumes energy equal to the Pokémon's retreat cost.
-//   - A KO scores a prize. First side to reach its prize target wins; a side
-//     that cannot field a replacement Pokémon loses immediately.
+// Rules follow the official Pokémon TCG rulebook, scaled down for mobile
+// (16-card decks, 3-card bench, KO targets instead of 6 prizes):
+//   - A coin flip decides who goes first; the starting player cannot attack
+//     on the game's very first turn.
+//   - Draw 1 card at the start of your turn — if you cannot, you lose
+//     (deck-out). Mulligans give the opponent an extra card.
+//   - Attach 1 energy per turn. Attacks require but do not consume energy;
+//     attacking ends your turn.
+//   - Retreat only once per turn (spends energy). Items are unlimited but
+//     only one Supporter card may be played per turn.
+//   - Special Conditions: burn 20 between turns (coin-flip cure), poison 10
+//     (no self-cure), paralysis blocks attack/retreat for a turn. Moving to
+//     the bench cures all conditions.
+//   - Win by reaching your KO target, opponent having no Pokémon, or deck-out.
 
 import { getPokemon } from '../data/pokedex.js';
 import { getTrainer } from '../data/trainers.js';
@@ -35,6 +40,7 @@ function makeCard(code, hpBonus = 0) {
     energy: 0,
     paralyzed: false,
     burned: false,
+    poisoned: false,
     shield: 0,
   };
 }
@@ -49,11 +55,13 @@ function shuffle(arr, rng) {
 }
 
 function makeSide(name, deckCodes, opts, rng) {
-  // Re-shuffle until the opening hand contains a Pokémon to lead with.
+  // Mulligan (rulebook p.8): reshuffle until the opening hand contains a
+  // Pokémon to lead with. Each reshuffle lets the opponent draw an extra card.
   let cards;
-  for (let tries = 0; ; tries++) {
+  let mulligans = 0;
+  for (; ; mulligans++) {
     cards = shuffle(deckCodes, rng).map((code) => makeCard(code, opts.hpBonus));
-    if (cards.slice(0, opts.handSize).some((c) => c.kind === 'poke') || tries >= 20) break;
+    if (cards.slice(0, opts.handSize).some((c) => c.kind === 'poke') || mulligans >= 20) break;
   }
   const hand = cards.splice(0, opts.handSize);
   const active = hand.splice(hand.findIndex((c) => c.kind === 'poke'), 1)[0];
@@ -65,11 +73,14 @@ function makeSide(name, deckCodes, opts, rng) {
     bench: [],
     discard: [],
     prizes: 0,
+    mulligans,
     prizeTarget: opts.prizeTarget,
     damageBonus: opts.damageBonus,
     doubleEnergyEvery: opts.doubleEnergyEvery,
     energyBudget: 0,
     attackedThisTurn: false,
+    retreatedThisTurn: false,
+    supporterUsedThisTurn: false,
   };
 }
 
@@ -99,6 +110,20 @@ export function newBattle({ playerName = 'You', playerDeckIds, level, rng = Math
   };
   log(state, `${level.trainer} wants to battle!`);
   log(state, `Win condition — you: ${level.playerPrizeTarget} KOs, ${level.trainer}: ${level.aiPrizeTarget} KOs.`);
+
+  // Mulligan compensation (rulebook): draw an extra card per opposing mulligan.
+  for (const [who, opp] of [['player', 'enemy'], ['enemy', 'player']]) {
+    const extras = Math.min(side(state, opp).mulligans,
+      HAND_LIMIT - side(state, who).hand.length, side(state, who).deck.length);
+    for (let i = 0; i < extras; i++) side(state, who).hand.push(side(state, who).deck.shift());
+    if (extras > 0) {
+      log(state, `${side(state, opp).name} mulliganed — ${side(state, who).name} draws ${extras} extra card${extras > 1 ? 's' : ''}.`);
+    }
+  }
+
+  // Coin flip decides who goes first (rulebook, Setting Up to Play, step 2).
+  state.turn = rng() < 0.5 ? 'player' : 'enemy';
+  log(state, `Coin flip: ${side(state, state.turn).name === 'You' ? 'You go' : `${side(state, state.turn).name} goes`} first! (No attacking on the very first turn.)`);
   startTurn(state);
   return state;
 }
@@ -121,6 +146,8 @@ export function startTurn(state) {
   const s = side(state, who);
   state.turnNumber++;
   s.attackedThisTurn = false;
+  s.retreatedThisTurn = false;
+  s.supporterUsedThisTurn = false;
 
   // Energy income (harder levels let the AI bank double energy periodically).
   s.energyBudget = 1;
@@ -130,12 +157,21 @@ export function startTurn(state) {
     log(state, `${s.name} is charging up — 2 energy this turn!`);
   }
 
-  // Draw.
-  if (s.deck.length > 0 && s.hand.length < HAND_LIMIT) {
+  // Draw. Official rule: if you cannot draw at the start of your turn
+  // because your deck is empty, you lose the game.
+  if (s.deck.length === 0) {
+    state.winner = opponentOf(who);
+    log(state, `${s.name} has no cards left to draw — ${side(state, state.winner).name} wins by deck-out!`);
+    return;
+  }
+  if (s.hand.length < HAND_LIMIT) {
     const drawn = s.deck.shift();
     s.hand.push(drawn);
     if (who === 'player') {
       log(state, `You drew ${drawn.kind === 'poke' ? drawn.base.name : drawn.trainer.name}.`);
+    }
+    if (s.deck.length > 0 && s.deck.length <= 3) {
+      log(state, `⚠ ${s.name === 'You' ? 'Your deck is' : `${s.name}'s deck is`} down to ${s.deck.length} card${s.deck.length > 1 ? 's' : ''} — deck-out means defeat!`);
     }
   }
 }
@@ -161,6 +197,9 @@ export function playTrainer(state, who, handIndex, arg) {
   if (!card || card.kind !== 'trainer') return false;
   const key = card.trainer.key;
 
+  // Official rule: only one Supporter card per turn.
+  if (card.trainer.category === 'supporter' && s.supporterUsedThisTurn) return false;
+
   if (key === 'potion') {
     const targets = [s.active, ...s.bench].filter((c) => c && c.hp < c.maxHp);
     if (targets.length === 0) return false;
@@ -172,7 +211,7 @@ export function playTrainer(state, who, handIndex, arg) {
   } else if (key === 'switch') {
     const incoming = s.bench[arg];
     if (!incoming || !s.active) return false;
-    s.active.burned = false;
+    cureConditions(s.active); // moving to the bench cures Special Conditions
     s.bench[arg] = s.active;
     s.active = incoming;
     log(state, `${s.name} used Switch — ${incoming.base.name} is now active!`, { kind: 'promote', uid: incoming.uid });
@@ -191,10 +230,18 @@ export function playTrainer(state, who, handIndex, arg) {
     return false;
   }
 
+  if (card.trainer.category === 'supporter') s.supporterUsedThisTurn = true;
   const idx = s.hand.indexOf(card);
   s.hand.splice(idx, 1);
   s.discard.push(card);
   return true;
+}
+
+// Moving to the bench cures all Special Conditions (rulebook).
+function cureConditions(card) {
+  card.paralyzed = false;
+  card.burned = false;
+  card.poisoned = false;
 }
 
 // target: 'active' or a bench index.
@@ -212,8 +259,8 @@ export function attachEnergy(state, who, target) {
 
 export function canRetreat(state, who) {
   const s = side(state, who);
-  return !!s.active && !s.active.paralyzed && s.bench.length > 0
-    && s.active.energy >= s.active.base.retreat;
+  return !!s.active && !s.active.paralyzed && !s.retreatedThisTurn
+    && s.bench.length > 0 && s.active.energy >= s.active.base.retreat;
 }
 
 export function retreat(state, who, benchIndex) {
@@ -223,7 +270,8 @@ export function retreat(state, who, benchIndex) {
   const incoming = s.bench[benchIndex];
   if (!incoming) return false;
   s.active.energy -= s.active.base.retreat; // retreat cost is spent
-  s.active.burned = false;                  // fresh air cures burns
+  cureConditions(s.active);                 // benching cures Special Conditions
+  s.retreatedThisTurn = true;               // only one retreat per turn
   s.bench[benchIndex] = s.active;
   s.active = incoming;
   log(state, `${s.name} retreated to ${incoming.base.name}.`, { kind: 'promote', uid: incoming.uid });
@@ -250,6 +298,10 @@ export function attack(state, who, attackIndex) {
   const o = side(state, opponentOf(who));
   if (state.winner || state.turn !== who || state.pendingPromote) return false;
   if (!s.active || !o.active || s.attackedThisTurn) return false;
+  if (state.turnNumber === 1) {
+    log(state, `No attacking on the very first turn of the game!`);
+    return false;
+  }
   if (s.active.paralyzed) {
     log(state, `${s.active.base.name} is paralyzed and can't attack!`, { kind: 'status', uid: s.active.uid });
     endTurn(state);
@@ -313,6 +365,10 @@ function applyEffects(state, who, atk, attacker, defender, dmgDealt) {
   if (e.burn && defender.hp > 0 && state.rng() < e.burn) {
     defender.burned = true;
     log(state, `${defender.base.name} is burned!`, { kind: 'status', uid: defender.uid });
+  }
+  if (e.poison && defender.hp > 0 && state.rng() < e.poison) {
+    defender.poisoned = true;
+    log(state, `${defender.base.name} is poisoned!`, { kind: 'status', uid: defender.uid });
   }
   if (e.snipe && o.bench.length > 0) {
     const target = o.bench[Math.floor(state.rng() * o.bench.length)];
@@ -425,14 +481,22 @@ export function endTurn(state) {
   const who = state.turn;
   const s = side(state, who);
 
-  // Burn ticks at the end of the burned side's turn, then may wear off.
+  // Special Conditions tick between turns (rulebook):
+  // Burned = 2 damage counters (20), then a coin flip to recover.
   if (s.active?.burned) {
-    s.active.hp -= 10;
-    log(state, `${s.active.base.name} is hurt by its burn (10).`, { kind: 'hit', uid: s.active.uid, amount: 10 });
+    s.active.hp -= 20;
+    log(state, `${s.active.base.name} is hurt by its burn (20).`, { kind: 'hit', uid: s.active.uid, amount: 20 });
     if (state.rng() < 0.5) {
       s.active.burned = false;
       log(state, `${s.active.base.name}'s burn wore off.`);
     }
+    resolveKnockouts(state);
+    if (state.winner) return;
+  }
+  // Poisoned = 1 damage counter (10); it does not wear off on its own.
+  if (s.active?.poisoned) {
+    s.active.hp -= 10;
+    log(state, `${s.active.base.name} is hurt by poison (10).`, { kind: 'hit', uid: s.active.uid, amount: 10 });
     resolveKnockouts(state);
     if (state.winner) return;
   }

@@ -5,7 +5,8 @@
 //   heal: n         heal the attacker n HP after dealing damage
 //   recoil: n       attacker takes n damage
 //   paralyze: p     chance (0..1) to paralyze the defender (skips its next attack)
-//   burn: p         chance (0..1) to burn the defender (10 damage per turn)
+//   burn: p         chance (0..1) to burn the defender (20 between turns, coin-flip cure)
+//   poison: p       chance (0..1) to poison the defender (10 between turns, no self-cure)
 //   drain: true     heal the attacker for half the damage dealt
 //   snipe: n        also hit one random benched enemy for n
 //   discardSelf: n  discard n energy from the attacker after the attack

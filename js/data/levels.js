@@ -4,6 +4,7 @@
 //   - extra enemy energy income (doubleEnergyEvery)
 //   - trainer cards in enemy decks (the AI knows how to use them)
 //   - asymmetric prize targets (you must score more KOs than the AI needs)
+//   - bigger boss decks (deck-out pressure works against you, not them)
 //   - smaller starting hands for the player at the top of the ladder
 //
 // Enemy decks mix Pokédex ids (numbers) and trainer cards (strings).
@@ -77,7 +78,7 @@ export const LEVELS = [
     title: 'Power Plant Showdown',
     icon: '⚡',
     ai: 'strategic',
-    deck: [26, 462, 101, 125, 135, 145, 181, 466, 479, 405, 131, 143, 'energize', 'potion'],
+    deck: [26, 462, 101, 125, 135, 145, 181, 466, 479, 405, 131, 143, 125, 181, 26, 'energize', 'potion', 'potion'],
     aiHpBonus: 20, aiDamageBonus: 20, doubleEnergyEvery: 0,
     playerHandSize: 5, playerPrizeTarget: 4, aiPrizeTarget: 4,
     rewardCatch: [181, 466, 405],
@@ -89,8 +90,8 @@ export const LEVELS = [
     title: 'Frozen Summit',
     icon: '❄️',
     ai: 'strategic',
-    deck: [87, 91, 131, 131, 144, 144, 461, 365, 471, 478, 473, 382, 'potion', 'switch', 'research'],
-    aiHpBonus: 20, aiDamageBonus: 20, doubleEnergyEvery: 4,
+    deck: [87, 91, 131, 131, 144, 144, 461, 365, 471, 478, 473, 382, 91, 473, 'potion', 'switch', 'research'],
+    aiHpBonus: 20, aiDamageBonus: 10, doubleEnergyEvery: 4,
     playerHandSize: 5, playerPrizeTarget: 4, aiPrizeTarget: 4,
     rewardCatch: [144, 461, 471, 131],
     blurb: 'Twin Articuno and the sea titan Kyogre guard the summit.',
@@ -101,7 +102,7 @@ export const LEVELS = [
     title: 'Dragon’s Den',
     icon: '🐉',
     ai: 'strategic',
-    deck: [130, 142, 148, 149, 149, 230, 373, 376, 445, 635, 384, 250, 'energize', 'potion', 'switch'],
+    deck: [130, 142, 148, 149, 149, 230, 373, 376, 445, 635, 384, 250, 149, 373, 445, 'energize', 'potion', 'switch', 'potion'],
     aiHpBonus: 20, aiDamageBonus: 20, doubleEnergyEvery: 3,
     playerHandSize: 4, playerPrizeTarget: 4, aiPrizeTarget: 4,
     rewardCatch: [149, 445, 635, 145],
@@ -114,7 +115,8 @@ export const LEVELS = [
     icon: '👑',
     ai: 'strategic',
     deck: [442, 445, 445, 350, 407, 448, 468, 423, 483, 484, 487, 491,
-      'potion', 'switch', 'research', 'energize'],
+      448, 468, 350, 442,
+      'potion', 'switch', 'research', 'energize', 'potion'],
     aiHpBonus: 20, aiDamageBonus: 10, doubleEnergyEvery: 4,
     playerHandSize: 4, playerPrizeTarget: 4, aiPrizeTarget: 4,
     rewardCatch: [445, 448, 468, 483, 484, 146],
@@ -127,7 +129,8 @@ export const LEVELS = [
     icon: '🌌',
     ai: 'strategic',
     deck: [493, 150, 491, 717, 382, 383, 384, 483, 484, 487, 643, 250,
-      'potion', 'switch', 'research', 'energize'],
+      644, 717, 150, 384, 491, 487,
+      'potion', 'switch', 'research', 'energize', 'potion', 'energize'],
     aiHpBonus: 30, aiDamageBonus: 10, doubleEnergyEvery: 3,
     playerHandSize: 4, playerPrizeTarget: 5, aiPrizeTarget: 3,
     rewardCatch: [150, 249, 250, 382, 383, 384, 487, 491, 643, 644, 493, 151],

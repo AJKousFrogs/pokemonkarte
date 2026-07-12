@@ -152,7 +152,7 @@ function heavyEffect(type, id, dmg, legendary) {
     electric: [{ paralyze: 0.3 }, { paralyze: 0.2 }, { recoil: 10 }],
     ice: [{ paralyze: 0.3 }, { snipe: 20 }, null],
     fighting: [{ recoil: 10 }, { paralyze: 0.2 }, null],
-    poison: [{ burn: 0.4 }, { burn: 0.3 }, { drain: true }],
+    poison: [{ poison: 0.5 }, { poison: 0.4 }, { drain: true }],
     ground: [{ snipe: 20 }, { recoil: 10 }, null],
     flying: [{ snipe: 10 }, { recoil: 20 }, null],
     psychic: [{ paralyze: 0.3 }, { shield: 20 }, { pierce: true }],

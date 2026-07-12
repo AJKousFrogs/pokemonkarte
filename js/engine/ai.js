@@ -91,7 +91,8 @@ function trainerPhase(state, tier, who) {
   const r = trainerIndex(s, 'research');
   if (r >= 0 && state.rng() >= skipChance) {
     const pokeInHand = s.hand.some((c) => c.kind === 'poke');
-    if (s.deck.length >= 4 && (s.hand.length <= 2 || (!pokeInHand && s.bench.length < BENCH_SIZE))) {
+    // Never Research the deck away — deck-out is a loss condition.
+    if (s.deck.length >= 7 && (s.hand.length <= 2 || (!pokeInHand && s.bench.length < BENCH_SIZE))) {
       playTrainer(state, who, r);
     }
   }

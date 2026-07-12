@@ -481,3 +481,6 @@ input[type="search"]:focus, select:focus { outline: none; border-color: var(--in
   .action-bar { bottom: var(--space-1); }
   .action-bar button { font-size: var(--fs-sm); padding: var(--space-2) var(--space-3); }
 }
+
+/* deck-out warning */
+.deckcount.warn { color: var(--danger); font-weight: var(--fw-bold); animation: selectPulse 1.6s infinite; border-radius: var(--radius-pill); padding: 0 6px; }
