@@ -103,8 +103,8 @@ export function newBattle({ playerName = 'You', playerDeckIds, level, rng = Math
   return state;
 }
 
-export function log(state, msg) {
-  state.log.push({ turn: state.turnNumber, msg });
+export function log(state, msg, fx = null) {
+  state.log.push({ turn: state.turnNumber, msg, fx });
 }
 
 function side(state, who) {
@@ -148,7 +148,7 @@ export function playToBench(state, who, handIndex) {
   if (!card || card.kind !== 'poke') return false;
   s.hand.splice(handIndex, 1);
   s.bench.push(card);
-  log(state, `${s.name} benched ${card.base.name}.`);
+  log(state, `${s.name} benched ${card.base.name}.`, { kind: 'bench', uid: card.uid });
   return true;
 }
 
@@ -168,14 +168,14 @@ export function playTrainer(state, who, handIndex, arg) {
     const t = targets[0];
     const healed = Math.min(30, t.maxHp - t.hp);
     t.hp += healed;
-    log(state, `${s.name} used Potion — ${t.base.name} healed ${healed} HP.`);
+    log(state, `${s.name} used Potion — ${t.base.name} healed ${healed} HP.`, { kind: 'heal', uid: t.uid, amount: healed });
   } else if (key === 'switch') {
     const incoming = s.bench[arg];
     if (!incoming || !s.active) return false;
     s.active.burned = false;
     s.bench[arg] = s.active;
     s.active = incoming;
-    log(state, `${s.name} used Switch — ${incoming.base.name} is now active!`);
+    log(state, `${s.name} used Switch — ${incoming.base.name} is now active!`, { kind: 'promote', uid: incoming.uid });
   } else if (key === 'research') {
     if (s.deck.length === 0) return false;
     const discarded = s.hand.filter((_, i) => i !== handIndex);
@@ -183,10 +183,10 @@ export function playTrainer(state, who, handIndex, arg) {
     s.hand = [card];
     const drawn = s.deck.splice(0, 4);
     s.hand.push(...drawn);
-    log(state, `${s.name} used Professor’s Research — discarded ${discarded.length}, drew ${drawn.length}.`);
+    log(state, `${s.name} used Professor’s Research — discarded ${discarded.length}, drew ${drawn.length}.`, { kind: 'trainer' });
   } else if (key === 'energize') {
     s.energyBudget++;
-    log(state, `${s.name} used Energy Boost — +1 energy this turn!`);
+    log(state, `${s.name} used Energy Boost — +1 energy this turn!`, { kind: 'trainer' });
   } else {
     return false;
   }
@@ -206,7 +206,7 @@ export function attachEnergy(state, who, target) {
   if (!card) return false;
   card.energy++;
   s.energyBudget--;
-  log(state, `${s.name} attached energy to ${card.base.name} (${card.energy}⚡).`);
+  log(state, `${s.name} attached energy to ${card.base.name} (${card.energy}⚡).`, { kind: 'energy', uid: card.uid });
   return true;
 }
 
@@ -226,7 +226,7 @@ export function retreat(state, who, benchIndex) {
   s.active.burned = false;                  // fresh air cures burns
   s.bench[benchIndex] = s.active;
   s.active = incoming;
-  log(state, `${s.name} retreated to ${incoming.base.name}.`);
+  log(state, `${s.name} retreated to ${incoming.base.name}.`, { kind: 'promote', uid: incoming.uid });
   return true;
 }
 
@@ -251,7 +251,7 @@ export function attack(state, who, attackIndex) {
   if (state.winner || state.turn !== who || state.pendingPromote) return false;
   if (!s.active || !o.active || s.attackedThisTurn) return false;
   if (s.active.paralyzed) {
-    log(state, `${s.active.base.name} is paralyzed and can't attack!`);
+    log(state, `${s.active.base.name} is paralyzed and can't attack!`, { kind: 'status', uid: s.active.uid });
     endTurn(state);
     return true;
   }
@@ -269,7 +269,7 @@ export function attack(state, who, attackIndex) {
     const absorbed = Math.min(defender.shield, dmg);
     dmg -= absorbed;
     defender.shield = 0;
-    log(state, `${defender.base.name}'s barrier absorbed ${absorbed} damage!`);
+    log(state, `${defender.base.name}'s barrier absorbed ${absorbed} damage!`, { kind: 'status', uid: defender.uid });
   }
 
   defender.hp -= dmg;
@@ -278,7 +278,7 @@ export function attack(state, who, attackIndex) {
     if (mult > 1) note = ' It’s super effective!';
     else if (mult < 1) note = ' It’s not very effective…';
   }
-  log(state, `${attacker.base.name} used ${atk.name} — ${dmg} damage.${note}`);
+  log(state, `${attacker.base.name} used ${atk.name} — ${dmg} damage.${note}`, { kind: 'hit', uid: defender.uid, amount: dmg });
 
   applyEffects(state, who, atk, attacker, defender, dmg);
   resolveKnockouts(state);
@@ -295,38 +295,38 @@ function applyEffects(state, who, atk, attacker, defender, dmgDealt) {
   if (e.heal && attacker.hp > 0) {
     const healed = Math.min(e.heal, attacker.maxHp - attacker.hp);
     attacker.hp += healed;
-    if (healed > 0) log(state, `${attacker.base.name} healed ${healed} HP.`);
+    if (healed > 0) log(state, `${attacker.base.name} healed ${healed} HP.`, { kind: 'heal', uid: attacker.uid, amount: healed });
   }
   if (e.drain && dmgDealt > 0 && attacker.hp > 0) {
     const healed = Math.min(Math.floor(dmgDealt / 2), attacker.maxHp - attacker.hp);
     attacker.hp += healed;
-    if (healed > 0) log(state, `${attacker.base.name} drained ${healed} HP.`);
+    if (healed > 0) log(state, `${attacker.base.name} drained ${healed} HP.`, { kind: 'heal', uid: attacker.uid, amount: healed });
   }
   if (e.recoil) {
     attacker.hp -= e.recoil;
-    log(state, `${attacker.base.name} took ${e.recoil} recoil damage.`);
+    log(state, `${attacker.base.name} took ${e.recoil} recoil damage.`, { kind: 'hit', uid: attacker.uid, amount: e.recoil });
   }
   if (e.paralyze && defender.hp > 0 && state.rng() < e.paralyze) {
     defender.paralyzed = true;
-    log(state, `${defender.base.name} is paralyzed!`);
+    log(state, `${defender.base.name} is paralyzed!`, { kind: 'status', uid: defender.uid });
   }
   if (e.burn && defender.hp > 0 && state.rng() < e.burn) {
     defender.burned = true;
-    log(state, `${defender.base.name} is burned!`);
+    log(state, `${defender.base.name} is burned!`, { kind: 'status', uid: defender.uid });
   }
   if (e.snipe && o.bench.length > 0) {
     const target = o.bench[Math.floor(state.rng() * o.bench.length)];
     target.hp -= e.snipe;
-    log(state, `${target.base.name} on the bench took ${e.snipe} splash damage!`);
+    log(state, `${target.base.name} on the bench took ${e.snipe} splash damage!`, { kind: 'hit', uid: target.uid, amount: e.snipe });
   }
   if (e.shield) {
     attacker.shield = e.shield;
-    log(state, `${attacker.base.name} raised a barrier (${e.shield}).`);
+    log(state, `${attacker.base.name} raised a barrier (${e.shield}).`, { kind: 'status', uid: attacker.uid });
   }
   if (e.discardSelf) {
     const lost = Math.min(e.discardSelf, attacker.energy);
     attacker.energy -= lost;
-    if (lost > 0) log(state, `${attacker.base.name} discarded ${lost} energy.`);
+    if (lost > 0) log(state, `${attacker.base.name} discarded ${lost} energy.`, { kind: 'energy', uid: attacker.uid });
   }
 }
 
@@ -341,7 +341,7 @@ function resolveKnockouts(state) {
         const ko = s.bench.splice(i, 1)[0];
         s.discard.push(ko);
         o.prizes++;
-        log(state, `${ko.base.name} was knocked out on the bench! (${o.name}: ${o.prizes}/${o.prizeTarget} KOs)`);
+        log(state, `${ko.base.name} was knocked out on the bench! (${o.name}: ${o.prizes}/${o.prizeTarget} KOs)`, { kind: 'ko', uid: ko.uid });
       }
     }
 
@@ -350,7 +350,7 @@ function resolveKnockouts(state) {
       s.discard.push(ko);
       s.active = null;
       o.prizes++;
-      log(state, `${ko.base.name} was knocked out! (${o.name}: ${o.prizes}/${o.prizeTarget} KOs)`);
+      log(state, `${ko.base.name} was knocked out! (${o.name}: ${o.prizes}/${o.prizeTarget} KOs)`, { kind: 'ko', uid: ko.uid });
     }
   }
   checkWinner(state);
@@ -405,7 +405,7 @@ export function promote(state, who, index) {
   pool.splice(index, 1);
   s.active = card;
   if (state.pendingPromote?.side === who) state.pendingPromote = null;
-  log(state, `${s.name} sent out ${card.base.name}!`);
+  log(state, `${s.name} sent out ${card.base.name}!`, { kind: 'promote', uid: card.uid });
   return true;
 }
 
@@ -428,7 +428,7 @@ export function endTurn(state) {
   // Burn ticks at the end of the burned side's turn, then may wear off.
   if (s.active?.burned) {
     s.active.hp -= 10;
-    log(state, `${s.active.base.name} is hurt by its burn (10).`);
+    log(state, `${s.active.base.name} is hurt by its burn (10).`, { kind: 'hit', uid: s.active.uid, amount: 10 });
     if (state.rng() < 0.5) {
       s.active.burned = false;
       log(state, `${s.active.base.name}'s burn wore off.`);

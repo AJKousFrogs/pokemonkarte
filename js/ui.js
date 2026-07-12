@@ -28,6 +28,7 @@ let enemyThinking = false;
 let resultModal = null;     // { win, newCatches, unlockedDeck }
 let dexDetail = null;       // pokedex entry shown in modal
 let dexFilter = { q: '', type: '', gen: '', status: '' };
+let helpOpen = false;       // in-battle "how to play" overlay
 
 // ---------------------------------------------------------------- helpers
 
@@ -76,6 +77,7 @@ export function render() {
   app.appendChild(view);
   if (resultModal) app.appendChild(resultOverlay());
   if (dexDetail) app.appendChild(dexOverlay());
+  if (helpOpen) app.appendChild(helpOverlay());
   if (battle?.pendingPromote?.side === 'player' && screen === 'battle' && !resultModal) {
     app.appendChild(promoteOverlay());
   }
@@ -233,31 +235,111 @@ function startBattle(level, deck) {
   currentDeck = deck;
   battle = newBattle({ playerDeckIds: deck.cards, level });
   markSeen(level.deck);
-  lastSeenLog = 0;
+  lastSeenLog = battle.log.length;
   resultModal = null;
   enemyThinking = false;
+  playing = false;
+  bannerText = `${level.trainer} wants to battle! First to ${level.playerPrizeTarget} KOs wins.`;
+  // Show the how-to-play card automatically on the very first battle.
+  if (!localStorage.getItem('pokemonkarte-help-seen')) {
+    helpOpen = true;
+    localStorage.setItem('pokemonkarte-help-seen', '1');
+  }
   go('battle');
 }
 
-function afterPlayerAction() {
+// ----- action → animation pipeline ------------------------------------
+// Every game action goes through act(): the engine appends log entries with
+// fx metadata, then animateDelta() replays them one at a time — banner text,
+// floating damage numbers, energy pulses, KO fades — before the final render.
+
+let playing = false;
+let bannerText = '';
+
+const FX_DELAY = {
+  hit: 900, ko: 950, promote: 700, heal: 650, energy: 550,
+  status: 650, bench: 450, trainer: 700, default: 500,
+};
+
+function act(fn) {
+  if (!battle || playing || battle.winner) return;
+  const from = battle.log.length;
+  const ok = fn();
+  if (ok === false) { render(); return; }
+  animateDelta(from, () => {
+    render();
+    if (battle.winner) return finishBattle();
+    maybeEnemyTurn();
+  });
+}
+
+function animateDelta(from, done) {
   if (!battle) return;
-  if (battle.winner) return finishBattle();
-  render();
-  maybeEnemyTurn();
+  const entries = battle.log.slice(from);
+  if (entries.length === 0) { done(); return; }
+  playing = true;
+  document.querySelector('.bstage')?.classList.add('locked');
+  const speed = entries.length > 8 ? 0.6 : 1;
+  let i = 0;
+  const step = () => {
+    if (!battle || i >= entries.length) {
+      playing = false;
+      done();
+      return;
+    }
+    const entry = entries[i++];
+    bannerText = entry.msg;
+    const bannerEl = document.getElementById('event-banner');
+    if (bannerEl) {
+      bannerEl.textContent = entry.msg;
+      bannerEl.classList.remove('pop');
+      void bannerEl.offsetWidth; // restart the pop animation
+      bannerEl.classList.add('pop');
+    }
+    applyFx(entry.fx);
+    const kind = entry.fx?.kind || 'default';
+    setTimeout(step, (FX_DELAY[kind] || FX_DELAY.default) * speed);
+  };
+  step();
+}
+
+function applyFx(fx) {
+  if (!fx?.uid) return;
+  const el = document.querySelector(`[data-uid="${fx.uid}"]`);
+  if (!el) return;
+  const flash = (cls, ms = 700) => { el.classList.add(cls); setTimeout(() => el.classList.remove(cls), ms); };
+  if (fx.kind === 'hit') { flash('shake', 620); if (fx.amount > 0) floatNum(el, `−${fx.amount}`, 'dmg'); }
+  else if (fx.kind === 'heal') { flash('glow-heal'); floatNum(el, `+${fx.amount}`, 'heal'); }
+  else if (fx.kind === 'energy') { flash('glow-energy'); floatNum(el, '+⚡', 'energy'); }
+  else if (fx.kind === 'ko') el.classList.add('ko');
+  else if (fx.kind === 'status') flash('shake-mild', 620);
+  else if (fx.kind === 'promote' || fx.kind === 'bench') flash('glow-in');
+}
+
+function floatNum(el, text, cls) {
+  const span = document.createElement('span');
+  span.className = `float-num ${cls}`;
+  span.textContent = text;
+  el.appendChild(span);
+  setTimeout(() => span.remove(), 1200);
 }
 
 function maybeEnemyTurn() {
-  if (!battle || battle.winner || enemyThinking) return;
+  if (!battle || battle.winner || enemyThinking || playing) return;
   if (battle.turn !== 'enemy' || battle.pendingPromote) return;
   enemyThinking = true;
+  bannerText = `${battle.enemy.name} is thinking…`;
   render();
   setTimeout(() => {
-    enemyThinking = false;
-    if (!battle || battle.winner) return;
+    if (!battle || battle.winner) { enemyThinking = false; return; }
+    const from = battle.log.length;
     aiTakeTurn(battle, currentLevel.ai, 'enemy');
-    if (battle.winner) return finishBattle();
-    render();
-  }, 900);
+    animateDelta(from, () => {
+      enemyThinking = false;
+      render();
+      if (battle.winner) return finishBattle();
+    });
+  }, 800);
 }
 
 function finishBattle() {
@@ -274,8 +356,11 @@ function finishBattle() {
   render();
 }
 
-function pcard(card, { small = false, attacks = false, selectable = false, hideHp = false } = {}) {
-  if (card.kind === 'trainer') return tcard(card, { small, selectable });
+// ----- cards ------------------------------------------------------------
+
+// size: 'active' (big, in the arena) | 'hand' | 'chip' (bench)
+function pcard(card, { size = 'hand', attacks = false, selectable = false, badge = '' } = {}) {
+  if (card.kind === 'trainer') return tcard(card, { size, selectable });
   const base = card.base;
   const pct = Math.max(0, Math.min(100, (card.hp / card.maxHp) * 100));
   const barClass = pct <= 30 ? 'low' : pct <= 60 ? 'mid' : '';
@@ -284,216 +369,280 @@ function pcard(card, { small = false, attacks = false, selectable = false, hideH
     card.burned ? '<span title="Burned">🔥</span>' : '',
     card.shield > 0 ? `<span title="Barrier ${card.shield}">🛡️</span>` : '',
   ].join('');
+
   let attackHtml = '';
   if (attacks) {
     const defender = battle.enemy.active;
     attackHtml = '<div class="attack-list">' + base.attacks.map((atk, i) => {
       const afford = card.energy >= atk.cost;
       const usable = afford && battle.turn === 'player' && !battle.winner
-        && !battle.pendingPromote && !battle.player.attackedThisTurn && !enemyThinking;
+        && !battle.pendingPromote && !battle.player.attackedThisTurn && !enemyThinking && !playing;
       const dmg = defender ? attackDamage(atk, card, defender, battle.player.damageBonus) : atk.damage;
       const eff = defender && !atk.effect?.pierce
         ? typeMultiplier(base.type, defender.base.type) : 1;
       const effIcon = eff > 1 ? ' ▲' : eff < 1 ? ' ▼' : '';
+      const pips = Array.from({ length: atk.cost }, (_, k) =>
+        `<span class="pip ${k < card.energy ? 'on' : ''}">⚡</span>`).join('');
       return `<button class="attack-btn" data-atk="${i}" ${usable ? '' : 'disabled'}>
-        <span>${'⚡'.repeat(atk.cost) || '·'} ${esc(atk.name)}</span>
+        <span class="atk-name">${pips || '·'} ${esc(atk.name)}</span>
         <span class="dmg">${atk.damage === 0 ? '—' : dmg + effIcon}</span>
       </button>`;
     }).join('') + '</div>';
   }
+
   const frag = h(`
-    <div class="pcard ${small ? 'small' : ''} ${selectable ? 'selectable' : ''} ${base.rarity === 'legendary' ? 'legendary' : ''}">
+    <div class="pcard ${size} ${selectable ? 'selectable' : ''} ${base.rarity === 'legendary' ? 'legendary' : ''}"
+         data-uid="${card.uid}">
+      ${badge ? `<span class="pbadge ${badge === 'READY' ? 'ready' : 'charge'}">${badge}</span>` : ''}
       <div class="head" style="background:${TYPE_COLORS[base.type]}">
         <span>${TYPE_ICONS[base.type]}</span><span>${base.rarity === 'legendary' ? '★ LEGEND' : esc(base.rarity)}</span>
       </div>
       <div class="statuses">${statuses}</div>
       <div class="art">${spriteImg(base)}</div>
       <div class="nm">${esc(base.name)}</div>
-      ${hideHp ? '' : `
-        <div class="hpbar ${barClass}"><div style="width:${pct}%"></div></div>
-        <div class="hptxt">${Math.max(0, card.hp)}/${card.maxHp} HP</div>`}
-      <div class="energy">${card.energy > 0 ? '⚡'.repeat(Math.min(card.energy, 8)) + (card.energy > 8 ? `×${card.energy}` : '') : ''}</div>
+      <div class="hpbar ${barClass}"><div style="width:${pct}%"></div></div>
+      <div class="hptxt"><strong>${Math.max(0, card.hp)}</strong>/${card.maxHp} HP</div>
+      <div class="energy">${card.energy > 0 ? '⚡'.repeat(Math.min(card.energy, 6)) + (card.energy > 6 ? `+${card.energy - 6}` : '') : '<span class="noenergy">no energy</span>'}</div>
       ${attackHtml}
     </div>`);
   return frag;
 }
 
 // Trainer (support) card.
-function tcard(card, { small = false, selectable = false } = {}) {
+function tcard(card, { size = 'hand', selectable = false } = {}) {
   const t = card.trainer;
   return h(`
-    <div class="pcard tcard ${small ? 'small' : ''} ${selectable ? 'selectable' : ''}" title="${esc(t.desc)}">
-      <div class="head" style="background:var(--accent);color:#1a1a06">
-        <span>${t.icon}</span><span>TRAINER</span>
-      </div>
+    <div class="pcard tcard ${size} ${selectable ? 'selectable' : ''}" data-uid="${card.uid}" title="${esc(t.desc)}">
+      <div class="head trainer-head"><span>${t.icon}</span><span>TRAINER</span></div>
       <div class="art"><span class="glyph">${t.icon}</span></div>
       <div class="nm">${esc(t.name)}</div>
       <div class="tdesc">${esc(t.desc)}</div>
     </div>`);
 }
 
+function diamonds(side) {
+  return '◆'.repeat(side.prizes) + '◇'.repeat(Math.max(0, side.prizeTarget - side.prizes));
+}
+
+// ----- the battle screen -------------------------------------------------
+
 function battleScreen() {
   if (!battle) { go('levels'); return h('<div></div>'); }
   const b = battle;
   const you = b.player;
   const foe = b.enemy;
-  const yourTurn = b.turn === 'player' && !b.winner && !enemyThinking;
+  const yourTurn = b.turn === 'player' && !b.winner && !enemyThinking && !playing;
+  const canGiveEnergy = yourTurn && you.energyBudget > 0 && !b.pendingPromote;
 
-  const frag = h(`
-    <div class="battle">
-      <div class="field">
-        <div class="turn-banner ${yourTurn ? 'you' : 'foe'}">
-          ${b.winner ? 'Battle over' : yourTurn ? '🟢 Your turn' : `🔴 ${esc(foe.name)} is thinking…`}
-        </div>
-
-        <div class="side-panel">
-          <div class="side-head">
-            <span class="who">${currentLevel.icon} ${esc(foe.name)}</span>
-            <span class="meta">
-              KOs: <span class="prizes">${foe.prizes}/${foe.prizeTarget}</span> ·
-              hand ${foe.hand.length} · deck ${foe.deck.length}
-            </span>
-          </div>
-          <div class="row" id="foe-field"></div>
-        </div>
-
-        <div class="side-panel">
-          <div class="side-head">
-            <span class="who">🎒 You (${esc(currentDeck.name)})</span>
-            <span class="meta">
-              KOs: <span class="prizes">${you.prizes}/${you.prizeTarget}</span> ·
-              deck ${you.deck.length}
-            </span>
-          </div>
-          <div class="row" id="you-field"></div>
-          <div class="bench-label" style="margin-top:8px">Hand — click a card to bench it (${you.bench.length}/${BENCH_SIZE} benched)</div>
-          <div class="hand-row" id="hand"></div>
-        </div>
-
-        <div class="action-bar" id="actions"></div>
-      </div>
-
-      <div class="logbox">
-        <h3>Battle log</h3>
-        <div class="entries"></div>
-      </div>
-    </div>`);
-
-  // --- enemy field: active first, then bench
-  const foeField = frag.querySelector('#foe-field');
-  if (foe.active) foeField.appendChild(pcard(foe.active));
-  if (foe.bench.length) {
-    const benchWrap = h('<div><div class="bench-label">Bench</div><div class="row"></div></div>');
-    foe.bench.forEach((c) => benchWrap.querySelector('.row').appendChild(pcard(c, { small: true })));
-    foeField.appendChild(benchWrap);
+  // Contextual hint when nothing is animating.
+  let idleHint = bannerText;
+  if (yourTurn && !playing) {
+    if (benchMode === 'switch') idleHint = 'Switch: tap a bench Pokémon to swap in for free.';
+    else if (benchMode === 'retreat') idleHint = `Retreat: tap a bench Pokémon to swap in (costs ⚡${you.active ? you.active.base.retreat : 0}).`;
+    else if (canGiveEnergy) idleHint = '⚡ Tap one of your Pokémon to give it energy.';
+    else if (you.active && affordableAttack(you.active) && !you.attackedThisTurn) idleHint = 'Choose an attack — or play cards first.';
+    else idleHint = 'Not enough energy to attack. Play cards, then end your turn.';
   }
 
-  // --- player field
-  const youField = frag.querySelector('#you-field');
-  const canGiveEnergy = yourTurn && you.energyBudget > 0 && !b.pendingPromote;
+  const frag = h(`
+    <div class="bstage">
+      <div class="statusbar">
+        <span class="turnchip ${yourTurn ? 'you' : 'foe'}">
+          ${b.winner ? '🏁 Battle over' : yourTurn ? `Turn ${Math.ceil(b.turnNumber / 2)} · YOUR MOVE` : `Turn ${Math.ceil(b.turnNumber / 2)} · ${esc(foe.name.toUpperCase())}`}
+        </span>
+        <span class="score" title="Knock-outs scored — fill all diamonds to win">
+          <span class="you-score">You ${diamonds(you)}</span>
+          <span class="foe-score">${diamonds(foe)} ${esc(foe.name)}</span>
+        </span>
+        <button class="help-btn" id="btn-help" title="How to play">?</button>
+      </div>
+
+      <section class="zone foe-zone">
+        <div class="zone-title">${currentLevel.icon} ${esc(foe.name)}
+          <span class="dim">· ${foe.hand.length} in hand · ${foe.deck.length} in deck</span>
+        </div>
+        <div class="bench-strip" id="foe-bench"></div>
+        <div class="arena-row"><div class="arena-slot" id="foe-active"></div></div>
+      </section>
+
+      <div class="event-banner pop" id="event-banner">${esc(idleHint)}</div>
+
+      <section class="zone you-zone">
+        <div class="arena-row"><div class="arena-slot" id="you-active"></div></div>
+        <div class="bench-strip" id="you-bench"></div>
+        <div class="zone-title">Your bench <span class="dim">· ${you.bench.length}/${BENCH_SIZE} — benched Pokémon wait here until you retreat or switch</span></div>
+      </section>
+
+      <section class="hand-zone">
+        <div class="zone-title">🎴 Your hand (${you.hand.length})
+          <span class="dim">· tap a Pokémon to bench it · tap a Trainer to use it</span>
+        </div>
+        <div class="hand-strip" id="hand"></div>
+      </section>
+
+      <div class="action-bar">
+        <span class="energy-chip ${you.energyBudget > 0 && yourTurn ? 'has' : ''}">⚡ ${you.energyBudget} to attach</span>
+        <span class="deckcount dim">deck ${you.deck.length}</span>
+        <span class="spacer"></span>
+        <button id="btn-retreat" ${yourTurn && (benchMode || canRetreat(b, 'player')) ? '' : 'disabled'}>
+          ${benchMode ? '✖ Cancel' : `Retreat ⚡${you.active ? you.active.base.retreat : 0}`}</button>
+        <button id="btn-end" class="btn-primary" ${yourTurn ? '' : 'disabled'}>End turn ▶</button>
+      </div>
+
+      <details class="logbox">
+        <summary>📜 Battle log (${b.log.length})</summary>
+        <div class="entries"></div>
+      </details>
+    </div>`);
+
+  // ---- enemy field
+  const foeBench = frag.querySelector('#foe-bench');
+  foe.bench.forEach((c) => foeBench.appendChild(pcard(c, { size: 'chip' })));
+  for (let i = foe.bench.length; i < BENCH_SIZE; i++) foeBench.appendChild(h('<div class="empty-slot"></div>'));
+  if (foe.active) frag.querySelector('#foe-active').appendChild(pcard(foe.active, { size: 'active' }));
+
+  // ---- your active (attacks + READY badge)
   if (you.active) {
-    const activeCard = pcard(you.active, { attacks: true, selectable: canGiveEnergy && !benchMode });
+    const ready = affordableAttack(you.active) && !you.attackedThisTurn;
+    const badge = !yourTurn ? '' : ready ? 'READY' : 'NEEDS ⚡';
+    const activeCard = pcard(you.active, {
+      size: 'active', attacks: true, badge,
+      selectable: canGiveEnergy && !benchMode,
+    });
     activeCard.querySelectorAll('[data-atk]').forEach((btn) => {
       btn.onclick = (e) => {
         e.stopPropagation();
-        attack(b, 'player', Number(btn.dataset.atk));
-        afterPlayerAction();
+        act(() => attack(b, 'player', Number(btn.dataset.atk)));
       };
     });
     if (canGiveEnergy && !benchMode) {
-      activeCard.firstElementChild.onclick = () => { attachEnergy(b, 'player', 'active'); afterPlayerAction(); };
-      activeCard.firstElementChild.title = 'Attach ⚡ energy';
+      activeCard.firstElementChild.onclick = () => act(() => attachEnergy(b, 'player', 'active'));
+      activeCard.firstElementChild.title = 'Tap to attach ⚡ energy';
     }
-    youField.appendChild(activeCard);
-  }
-  if (you.bench.length) {
-    const benchWrap = h(`<div><div class="bench-label">${benchMode ? 'Click who takes over!' : 'Bench'}</div><div class="row"></div></div>`);
-    you.bench.forEach((c, i) => {
-      const selectable = (benchMode && yourTurn) || (canGiveEnergy && !benchMode);
-      const cardEl = pcard(c, { small: true, selectable });
-      if (benchMode && yourTurn) {
-        cardEl.firstElementChild.onclick = () => {
-          const mode = benchMode;
-          const trainerIdx = switchHandIdx;
-          benchMode = null;
-          switchHandIdx = -1;
-          if (mode === 'switch') playTrainer(b, 'player', trainerIdx, i);
-          else retreat(b, 'player', i);
-          afterPlayerAction();
-        };
-      } else if (canGiveEnergy) {
-        cardEl.firstElementChild.onclick = () => { attachEnergy(b, 'player', i); afterPlayerAction(); };
-        cardEl.firstElementChild.title = 'Attach ⚡ energy';
-      }
-      benchWrap.querySelector('.row').appendChild(cardEl);
-    });
-    youField.appendChild(benchWrap);
+    frag.querySelector('#you-active').appendChild(activeCard);
   }
 
-  // --- hand (Pokémon bench on click; trainer cards play their effect)
+  // ---- your bench
+  const youBench = frag.querySelector('#you-bench');
+  you.bench.forEach((c, i) => {
+    const selectable = (benchMode && yourTurn) || (canGiveEnergy && !benchMode);
+    const cardEl = pcard(c, { size: 'chip', selectable });
+    if (benchMode && yourTurn) {
+      cardEl.firstElementChild.onclick = () => {
+        const mode = benchMode;
+        const trainerIdx = switchHandIdx;
+        benchMode = null;
+        switchHandIdx = -1;
+        if (mode === 'switch') act(() => playTrainer(b, 'player', trainerIdx, i));
+        else act(() => retreat(b, 'player', i));
+      };
+    } else if (canGiveEnergy) {
+      cardEl.firstElementChild.onclick = () => act(() => attachEnergy(b, 'player', i));
+      cardEl.firstElementChild.title = 'Tap to attach ⚡ energy';
+    }
+    youBench.appendChild(cardEl);
+  });
+  for (let i = you.bench.length; i < BENCH_SIZE; i++) {
+    youBench.appendChild(h('<div class="empty-slot">bench<br>slot</div>'));
+  }
+
+  // ---- hand
   const hand = frag.querySelector('#hand');
   you.hand.forEach((c, i) => {
     const actable = yourTurn && !b.pendingPromote && !benchMode;
     if (c.kind === 'trainer') {
-      const cardEl = pcard(c, { small: true, selectable: actable });
+      const cardEl = pcard(c, { size: 'hand', selectable: actable });
       if (actable) {
         cardEl.firstElementChild.onclick = () => {
           if (c.trainer.key === 'switch') {
-            if (you.bench.length === 0 || !you.active) return;
+            if (you.bench.length === 0 || !you.active) { setBanner('Switch needs a benched Pokémon.'); return; }
             benchMode = 'switch';
             switchHandIdx = i;
             render();
           } else {
-            playTrainer(b, 'player', i);
-            afterPlayerAction();
+            act(() => playTrainer(b, 'player', i));
           }
         };
       }
       hand.appendChild(cardEl);
     } else {
       const canPlay = actable && you.bench.length < BENCH_SIZE;
-      const cardEl = pcard(c, { small: true, selectable: canPlay });
-      if (canPlay) cardEl.firstElementChild.onclick = () => { playToBench(b, 'player', i); afterPlayerAction(); };
+      const cardEl = pcard(c, { size: 'hand', selectable: canPlay });
+      if (actable) {
+        cardEl.firstElementChild.onclick = () => {
+          if (!canPlay) { setBanner('Your bench is full (3/3).'); return; }
+          act(() => playToBench(b, 'player', i));
+        };
+      }
       hand.appendChild(cardEl);
     }
   });
+  if (you.hand.length === 0) hand.appendChild(h('<div class="dim" style="padding:8px">No cards in hand — you draw 1 each turn.</div>'));
 
-  // --- action bar
-  const actions = frag.querySelector('#actions');
-  const hint = benchMode === 'switch'
-    ? 'Switch: pick a bench Pokémon to swap in for free.'
-    : benchMode === 'retreat'
-      ? 'Pick a bench Pokémon to switch in (retreat spends energy).'
-      : canGiveEnergy
-        ? 'Click one of your Pokémon to attach energy, then attack or end your turn.'
-        : yourTurn ? 'Attack with your active Pokémon, or end your turn.' : '';
-  actions.appendChild(h(`
-    <span class="energy-chip">⚡ energy left: ${you.energyBudget}</span>
-    <span class="hint">${hint}</span>`));
-  const retreatBtn = h(`<button ${yourTurn && (benchMode || canRetreat(b, 'player')) ? '' : 'disabled'}>
-    ${benchMode ? 'Cancel' : `Retreat (⚡${you.active ? you.active.base.retreat : 0})`}</button>`);
-  retreatBtn.firstElementChild.onclick = () => {
+  // ---- action buttons
+  frag.querySelector('#btn-help').onclick = () => { helpOpen = true; render(); };
+  frag.querySelector('#btn-retreat').onclick = () => {
     benchMode = benchMode ? null : 'retreat';
     switchHandIdx = -1;
     render();
   };
-  actions.appendChild(retreatBtn);
-  const endBtn = h(`<button class="btn-primary" ${yourTurn ? '' : 'disabled'}>End turn ▶</button>`);
-  endBtn.firstElementChild.onclick = () => { benchMode = null; endTurn(b); afterPlayerAction(); };
-  actions.appendChild(endBtn);
+  frag.querySelector('#btn-end').onclick = () => { benchMode = null; act(() => { endTurn(b); }); };
 
-  // --- log
+  // ---- log
   const entries = frag.querySelector('.entries');
-  const recentFrom = lastSeenLog;
   b.log.forEach((entry, i) => {
-    entries.appendChild(h(`<div class="${i >= recentFrom ? 'recent' : ''}">${esc(entry.msg)}</div>`));
+    entries.appendChild(h(`<div class="${i >= lastSeenLog ? 'recent' : ''}">${esc(entry.msg)}</div>`));
   });
   if (yourTurn) lastSeenLog = b.log.length;
 
   return frag;
 }
 
+function affordableAttack(card) {
+  return card.base.attacks.some((atk) => card.energy >= atk.cost);
+}
+
+function setBanner(text) {
+  bannerText = text;
+  const el = document.getElementById('event-banner');
+  if (el) {
+    el.textContent = text;
+    el.classList.remove('pop');
+    void el.offsetWidth;
+    el.classList.add('pop');
+  }
+}
+
 // ---------------------------------------------------------------- overlays
+
+function helpOverlay() {
+  const frag = h(`
+    <div class="overlay">
+      <div class="modal help-modal">
+        <h2>How a turn works</h2>
+        <div class="help-steps">
+          <div class="help-step"><span class="step-no">1</span>
+            <div><strong>Play cards from your hand</strong><br>
+            Tap a Pokémon to put it on your bench (max 3). Tap a Trainer card to use its effect — it never ends your turn.</div></div>
+          <div class="help-step"><span class="step-no">2</span>
+            <div><strong>Attach your ⚡ energy</strong><br>
+            You get 1 energy per turn. Tap any of your Pokémon (glowing gold) to power it up. Attacks need energy to use — but don't spend it.</div></div>
+          <div class="help-step"><span class="step-no">3</span>
+            <div><strong>Attack (or retreat)</strong><br>
+            When your active Pokémon shows <span style="color:#7fd493;font-weight:700">READY</span>, tap an attack. ▲ means super effective (×2), ▼ resisted (×½). Attacking ends your turn. Retreating swaps in a bench Pokémon and spends energy.</div></div>
+          <div class="help-step"><span class="step-no">4</span>
+            <div><strong>Win by knock-outs</strong><br>
+            Each KO fills one of your diamonds ◆ at the top. Fill them all before your opponent does. 💫 paralysis skips an attack, 🔥 burn deals 10 per turn, 🛡️ barriers absorb one hit.</div></div>
+        </div>
+        <div class="btns"><button class="btn-primary">Got it!</button></div>
+      </div>
+    </div>`);
+  frag.querySelector('button.btn-primary').onclick = () => { helpOpen = false; render(); };
+  frag.querySelector('.overlay').onclick = (e) => {
+    if (e.target.classList.contains('overlay')) { helpOpen = false; render(); }
+  };
+  return frag;
+}
 
 function promoteOverlay() {
   const pending = battle.pendingPromote;
@@ -508,7 +657,7 @@ function promoteOverlay() {
     </div>`);
   const choices = frag.querySelector('.choices');
   pending.options.forEach(({ index, card }) => {
-    const el = pcard(card, { small: true, selectable: true });
+    const el = pcard(card, { size: 'hand', selectable: true });
     el.firstElementChild.onclick = () => {
       promote(battle, 'player', index);
       render();
